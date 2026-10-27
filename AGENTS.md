@@ -42,8 +42,9 @@ Two consumption modes, never both at once on one machine:
    resource that is not listed there does not exist for the human reading it.
 5. **Run `npm run check` before claiming done.** It runs the behavior tests and
    Pi's real extension loader; both must pass.
-6. **Docs in English inside code and AGENTS.md; README and user-facing strings in
-   Portuguese.** Chat replies to the user: Portuguese.
+6. **Every `.md` file in this repo is written in English** (code comments and
+   identifiers too). Chat replies to the user follow the user's language
+   (usually Portuguese).
 
 ## Add an extension
 
@@ -146,6 +147,7 @@ Then restart Pi or `/reload` — a running session keeps the old extension code.
 - [ ] Resource added under the right directory, named per convention.
 - [ ] `npm run check` green (new behavior has a test when it is code).
 - [ ] `README.md` tables updated; `docs/<name>.md` added or updated.
+- [ ] All markdown is in English (README, docs, AGENTS, anything else).
 - [ ] `package.json` manifest still matches the directory layout (no stale paths).
 - [ ] No secrets, sessions, backups or `node_modules` staged.
 - [ ] If behavior changed for the user: say so in one line in the reply.

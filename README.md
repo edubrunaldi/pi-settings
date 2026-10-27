@@ -1,134 +1,133 @@
 # pi-settings
 
-Minhas customizações do [Pi](https://pi.dev) / Pi-Bolt versionadas num só lugar:
-extensões, skills, prompt templates e temas. O repo é um **Pi package** válido
-(`package.json` com o manifesto `pi`), então serve tanto para instalar via git
-quanto para copiar para `~/.pi/agent`.
+My [Pi](https://pi.dev) / Pi-Bolt customizations versioned in one place:
+extensions, skills, prompt templates and themes. The repo is a valid **Pi
+package** (`package.json` with the `pi` manifest), so it can be installed from
+git or copied into `~/.pi/agent`.
 
 ```text
 pi-settings/
-├── package.json        # manifesto do Pi package (pi.extensions / skills / prompts)
-├── extensions/         # extensões TypeScript (carregadas por arquivo, ou pasta com index.ts)
-├── skills/             # uma pasta por skill, cada uma com SKILL.md
-├── prompts/            # prompt templates: o nome do arquivo vira o comando /nome
-├── plan-flow/          # overrides das instruções de fase da extensão plan (copiados no install)
-├── themes/             # temas JSON (criado quando houver o primeiro)
-├── docs/               # documentação longa de cada recurso
-├── tests/              # testes offline + stubs dos pacotes do host
+├── package.json        # Pi package manifest (pi.extensions / skills / prompts)
+├── extensions/         # TypeScript extensions (one file, or a directory with index.ts)
+├── skills/             # one directory per skill, each with SKILL.md
+├── prompts/            # prompt templates: the filename becomes the /command
+├── plan-flow/          # phase instruction overrides for the plan extension (copied on install)
+├── themes/             # JSON themes (created with the first one)
+├── docs/               # long-form documentation per resource
+├── tests/              # offline tests + host package stubs
 └── scripts/            # install.ps1 / install.sh
 ```
 
-## Extensões
+## Extensions
 
-| Extensão | Arquivo | Comando | Ferramentas | Para que serve | Doc |
+| Extension | File | Command | Tools | What it does | Doc |
 |---|---|---|---|---|---|
-| **plan** | `extensions/plan.ts` | `/plan` | `plan_advance`, `plan_title` | Fluxo de planejamento em fases (`investigate → summary → plan → ready`) com aprovação humana, plano escrito direto num arquivo `.md` e sessão nova para implementar | [docs/plan.md](docs/plan.md) |
+| **plan** | `extensions/plan.ts` | `/plan` | `plan_advance`, `plan_title` | Phased planning workflow (`investigate → summary → plan → ready`) with human approval, the plan written straight to a `.md` file, and a fresh session for implementation | [docs/plan.md](docs/plan.md) |
 
-### `/plan` em uma tabela
+### `/plan` in one table
 
-| Comando | O que faz |
+| Command | What it does |
 |---|---|
-| `/plan start <problema>` | começa na fase de investigação (manda o prompt de kickoff) |
-| `/plan summary` | pede o resumo (atalho; o modelo também pode pedir via `plan_advance`) |
-| `/plan approve` | aprova o resumo (→ planejamento, cria o arquivo) / aprova o plano (→ pronto, oferece sessão nova) |
-| `/plan title <2-4 palavras>` | renomeia o plano (título e nome do arquivo) |
-| `/plan back <fase>` | volta para `investigate` \| `summary` \| `plan` |
-| `/plan guard on\|off` | liga/desliga o bloqueio de `edit`/`write` em investigate/summary |
-| `/plan status` | estado atual |
-| `/plan stop` | desliga o fluxo |
+| `/plan start <problem>` | starts in the investigation phase (sends the kickoff prompt) |
+| `/plan summary` | asks for the summary (shortcut; the model can also request it via `plan_advance`) |
+| `/plan approve` | approves the summary (→ planning, creates the file) / approves the plan (→ ready, offers a new session) |
+| `/plan title <2-4 words>` | renames the plan (heading and file name) |
+| `/plan back <phase>` | goes back to `investigate` \| `summary` \| `plan` |
+| `/plan guard on\|off` | toggles the `edit`/`write` block in investigate/summary |
+| `/plan status` | current state |
+| `/plan stop` | turns the flow off |
 
-O que a extensão protege e o que não protege: `edit`/`write` são bloqueados em
-`investigate`/`summary`, mas `bash` continua liberado — é convenção de fluxo, não
-fronteira de segurança.
+What the extension does and does not protect: `edit`/`write` are blocked in
+`investigate`/`summary`, but `bash` stays allowed — that is a workflow
+convention, not a security boundary.
 
 ## Skills
 
-| Skill | Pasta | Quando usar | Doc |
+| Skill | Directory | When to use | Doc |
 |---|---|---|---|
-| _(nenhuma ainda)_ | — | — | — |
+| _(none yet)_ | — | — | — |
 
 ## Prompt templates
 
-| Comando | Arquivo | Argumentos | Para que serve |
+| Command | File | Arguments | What it does |
 |---|---|---|---|
-| _(nenhum ainda)_ | — | — | — |
+| _(none yet)_ | — | — | — |
 
-## Instalar em outro PC
+## Install on another machine
 
-Três caminhos. **Escolha um por máquina** — usar dois ao mesmo tempo carrega a
-mesma extensão duas vezes (o Pi avisa sobre o comando `/plan` duplicado).
+Three paths. **Pick one per machine** — using two at the same time loads the same
+extension twice (Pi warns about the duplicate `/plan` command).
 
-### A. Como Pi package (não precisa clonar)
+### A. As a Pi package (no clone needed)
 
 ```bash
 pi-bolt install git:github.com/edubrunaldi/pi-settings
-pi-bolt list                      # confere
-pi-bolt update --extensions       # atualiza depois de um push
+pi-bolt list                      # check it
+pi-bolt update --extensions       # update after a push
 ```
 
-O clone gerenciado pelo Pi fica em `~/.pi/agent/npm/`. Precisa que o repo esteja
-publicado (push feito).
+The managed clone lives in `~/.pi/agent/npm/`. Requires the repo to be pushed.
 
-### B. Clonando o repo (repo = fonte da verdade)
+### B. Cloning the repo (repo = source of truth)
 
-Windows (PowerShell) / Linux e macOS:
+Windows (PowerShell) / Linux and macOS:
 
 ```powershell
 git clone https://github.com/edubrunaldi/pi-settings.git
 cd pi-settings
-.\scripts\install.ps1            # copia para ~/.pi/agent
-.\scripts\install.ps1 -Link      # ou symlink (Windows: precisa de Developer Mode)
-.\scripts\install.ps1 -DryRun    # só mostra o que faria
+.\scripts\install.ps1            # copy into ~/.pi/agent
+.\scripts\install.ps1 -Link      # or symlink (Windows: needs Developer Mode)
+.\scripts\install.ps1 -DryRun    # only show what it would do
 ```
 
 ```bash
 git clone https://github.com/edubrunaldi/pi-settings.git
 cd pi-settings
-./scripts/install.sh             # copia para ~/.pi/agent
-./scripts/install.sh --link      # symlink, repo vira a fonte da verdade
+./scripts/install.sh             # copy into ~/.pi/agent
+./scripts/install.sh --link      # symlink, repo stays the source of truth
 ./scripts/install.sh --dry-run
-PI_AGENT_DIR=/caminho/do/agent ./scripts/install.sh
+PI_AGENT_DIR=/path/to/agent ./scripts/install.sh
 ```
 
-O script faz backup `*.bak-<timestamp>` do que sobrescreve, pula arquivos
-idênticos e avisa se o repo também estiver instalado como package.
+The script backs up `*.bak-<timestamp>` whatever it overwrites, skips identical
+files, and warns if the repo is also installed as a package.
 
-### C. Na mão
+### C. By hand
 
-| Do repo | Para |
+| From the repo | To |
 |---|---|
 | `extensions/*.ts` | `~/.pi/agent/extensions/` |
-| `skills/<nome>/` | `~/.pi/agent/skills/<nome>/` |
+| `skills/<name>/` | `~/.pi/agent/skills/<name>/` |
 | `prompts/*.md` | `~/.pi/agent/prompts/` |
 | `themes/*.json` | `~/.pi/agent/themes/` |
-| `plan-flow/*.md` (sem `README.md`) | `~/.pi/agent/plan-flow/` |
+| `plan-flow/*.md` (without `README.md`) | `~/.pi/agent/plan-flow/` |
 
-### Depois de instalar
+### After installing
 
-Reinicie o Pi ou rode `/reload` numa sessão aberta. Para conferir a extensão:
+Restart Pi or run `/reload` in an open session. To check the extension:
 
 ```text
 /plan status
 ```
 
-## Testar antes de instalar
+## Test before installing
 
 ```bash
-npm run check      # testes de comportamento + load check com o loader real do Pi
+npm run check      # behavior tests + load check with Pi's real loader
 ```
 
-Não precisa de `npm install`: `tests/run.mjs` copia os stubs de `tests/stubs/`
-para `node_modules/` na primeira execução.
+No `npm install` needed: `tests/run.mjs` copies the stubs from `tests/stubs/` into
+`node_modules/` on first run.
 
-## O que não está (e não deveria estar) aqui
+## What is not (and should not be) here
 
-| Item | Por quê |
+| Item | Why |
 |---|---|
-| `auth.json`, `models-store.json`, `sessions/`, `missions/` | credenciais, estado e histórico por máquina |
-| `missions/`, `cache/`, `fff/`, `bin/` | artefatos gerados |
-| pacotes npm de terceiros | instale com `pi-bolt install`, ou liste em `settings.json` → `packages` |
+| `auth.json`, `models-store.json`, `sessions/`, `missions/` | credentials, state and history are per machine |
+| `missions/`, `cache/`, `fff/`, `bin/` | generated artifacts |
+| third-party npm packages | install them with `pi-bolt install`, or list them in `settings.json` → `packages` |
 
-Sugestão de `settings.json` (não versionado, porque é por máquina):
+Suggested `settings.json` (not versioned, because it is per machine):
 
 ```json
 {
@@ -142,6 +141,6 @@ Sugestão de `settings.json` (não versionado, porque é por máquina):
 }
 ```
 
-## Adicionar coisas novas
+## Adding new resources
 
-Estrutura, convenções e checklist por tipo de recurso: [AGENTS.md](AGENTS.md).
+Structure, conventions and per-type checklist: [AGENTS.md](AGENTS.md).
