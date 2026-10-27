@@ -1,0 +1,31 @@
+{
+  "name": "pi-settings",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Personal Pi/Pi-Bolt settings packaged as a Pi package: extensions, skills, prompt templates and themes.",
+  "type": "module",
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ],
+    "skills": [
+      "./skills"
+    ],
+    "prompts": [
+      "./prompts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "scripts": {
+    "test": "node tests/run.mjs",
+    "test:load": "node tests/load-check.mjs",
+    "check": "node tests/run.mjs && node tests/load-check.mjs"
+  }
+}

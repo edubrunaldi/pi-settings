@@ -1,0 +1,14 @@
+# Test stubs copied by tests/run.mjs
+node_modules/
+
+# Installer backups
+*.bak-*
+*.bak
+
+# Local scratch (not resources)
+.pi/
+plans/
+
+# OS noise
+.DS_Store
+Thumbs.db
