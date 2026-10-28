@@ -19,6 +19,9 @@ Rules that must survive an override:
 
 - keep the `plan_title` / 2-to-4-word title guidance;
 - keep "the plan file holds the plan and nothing else";
+- keep "Ask the user through the `ask` tool, never in prose", or `common.md`
+  silently removes the only place the plan flow tells the model to use
+  [`extensions/ask/`](../docs/ask.md);
 - keep `${planPath}`, which the extension replaces with the real file path in
   `plan.md` and `ready.md`.
 

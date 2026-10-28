@@ -167,6 +167,7 @@ In this phase do not keep exploring or reopen decisions that are already approve
 const COMMON_RULES = `General flow rules:
 Phases are user-controlled. Never advance a phase on your own: transitions require user confirmation (the plan_advance dialog) or a /plan command.
 Once the plan file exists, it is the source of truth: plan content lives in that file, never in a chat response.
+Ask the user through the \`ask\` tool, never in prose, batching every question you need in one call.
 Answer in the user's language. Cite evidence (file:symbol) instead of speaking in generalities.`;
 
 function nowIso(): string {

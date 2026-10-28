@@ -23,6 +23,7 @@ pi-settings/
 | Extension | File | Command | Tools | What it does | Doc |
 |---|---|---|---|---|---|
 | **plan** | `extensions/plan.ts` | `/plan` | `plan_advance`, `plan_title` | Phased planning workflow (`investigate → summary → plan → ready`) with human approval, the plan written straight to a `.md` file, and a fresh session for implementation | [docs/plan.md](docs/plan.md) |
+| **ask** | `extensions/ask/` | — | `ask` | Interactive radio/checkbox question picker with a free-form last option, inline in the editor area; degrades to a prose instruction without a terminal | [docs/ask.md](docs/ask.md) |
 
 ### `/plan` in one table
 
@@ -97,6 +98,7 @@ files, and warns if the repo is also installed as a package.
 | From the repo | To |
 |---|---|
 | `extensions/*.ts` | `~/.pi/agent/extensions/` |
+| `extensions/<name>/` (directory with `index.ts`) | `~/.pi/agent/extensions/<name>/` |
 | `skills/<name>/` | `~/.pi/agent/skills/<name>/` |
 | `prompts/*.md` | `~/.pi/agent/prompts/` |
 | `themes/*.json` | `~/.pi/agent/themes/` |
