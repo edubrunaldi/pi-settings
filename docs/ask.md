@@ -32,6 +32,18 @@ so the same rule reaches sessions where no plan flow is running.
 > embedded rules and the `ask` sentence disappears with it. Copy the sentence
 > into your override (see [`plan-flow/README.md`](../plan-flow/README.md)).
 
+### The recommendation goes first
+
+Every question carries a recommendation, and it is the **first** option, with the
+word written in its label: `(recommended)`, or `(recomendado)` when the
+conversation is in Portuguese. The rule is stated in three model-facing places —
+the tool description, `promptGuidelines` and the `options` schema description —
+and nowhere else: the picker does not reorder or annotate anything, so a call
+that ignores it renders exactly as sent. It is a convention, not a validator; a
+model that has no recommendation to give still has to pick the least bad option
+and say so. Keeping the recommendation first also means the cursor's start
+position is the answer most users accept with a single `Enter`.
+
 ## Tool input
 
 ```ts
@@ -42,8 +54,8 @@ so the same rule reaches sessions where no plan flow is running.
       header: "Scope",              // tab label, about 12 characters
       prompt: "How much should change?",
       type: "single",               // "single" (radio, default) or "multi" (checkbox)
-      options: [                    // 2 to 8 declared options
-        { label: "Minimal", description: "Retry only, one file." },
+      options: [                    // 2 to 8 declared options, best first
+        { label: "Minimal (recommended)", description: "Retry only, one file." },
         { label: "Complete", description: "Retry plus quarantine." }
       ]
     }
@@ -115,7 +127,7 @@ Two more runtime rules, both because a dialog is a hard place to fail:
 `AGENTS.md` asks that a tool stay out of the active set while its feature is off.
 `ask` does not follow that: it is **always active**. A question can be needed in
 any phase of any workflow, and switching it on per feature would need a signal
-that does not exist yet. The cost is one `promptSnippet` line and three
+that does not exist yet. The cost is one `promptSnippet` line and four
 `promptGuidelines` in every system prompt. `plan.ts` never drops it —
 `syncToolActivation` only touches `plan_advance`/`plan_title`.
 

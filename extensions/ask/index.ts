@@ -12,7 +12,10 @@
  * - headless degrades, never fails: without a terminal UI the model is told to ask in prose, so a print,
  *   json, rpc or subagent run does not lose the turn;
  * - the picker resolves exactly once — through its own `done`, or as cancelled when the run aborts — so
- *   no dialog outlives the tool call.
+ *   no dialog outlives the tool call;
+ * - convention, not enforcement: every question's first option is the recommended one and says so in
+ *   its label (`(recommended)` / `(recomendado)`). Stated in the tool description, the prompt
+ *   guidelines and the option schema, because the picker itself is neutral about ordering.
  *
  * Layout, keys and focus live in `questionnaire.ts` (loaded only when a picker is actually opened, so
  * the TUI module graph stays out of every other mode); the checkable data rules live in `logic.ts`.
@@ -39,7 +42,10 @@ import {
 import type { PickerResult } from "./questionnaire.ts";
 
 const OPTION_PARAMS = Type.Object({
-	label: Type.String({ description: "User-facing label, 1 to 5 words." }),
+	label: Type.String({
+		description:
+			"User-facing label, 1 to 5 words. The first option's label ends with `(recommended)` — `(recomendado)` in Portuguese.",
+	}),
 	description: Type.Optional(
 		Type.String({ description: "One sentence on what this option costs or implies." }),
 	),
@@ -57,7 +63,10 @@ const QUESTION_PARAMS = Type.Object({
 	options: Type.Array(OPTION_PARAMS, {
 		minItems: MIN_OPTIONS,
 		maxItems: MAX_OPTIONS,
-		description: `The free-form "${CUSTOM_LABEL}" option is added by the picker; never list it yourself.`,
+		description:
+			"Ordered by recommendation: the first option is the one you recommend and its label ends with " +
+			"`(recommended)` — `(recomendado)` in Portuguese. " +
+			`The free-form "${CUSTOM_LABEL}" option is added by the picker; never list it yourself.`
 	}),
 });
 
@@ -79,13 +88,16 @@ export default function ask(pi: ExtensionAPI) {
 		description:
 			"Ask the user one or more multiple-choice questions in an interactive picker. " +
 			"Use it instead of writing questions in your reply whenever you need a decision, a preference, " +
-			"or missing information. Every question also offers a free-form answer.",
+			"or missing information. Always put your recommended option first, marked `(recommended)` — " +
+			"`(recomendado)` in Portuguese. Every question also offers a free-form answer.",
 		promptSnippet:
 			"Ask the user multiple-choice questions in an interactive picker (radio, checkbox, or free-form).",
 		promptGuidelines: [
 			"Never ask the user a question in prose: call `ask` and batch every question you need in one call.",
 			"Use `ask` before guessing: when a request hides an unmade decision, ask instead of picking a default.",
 			"Give each `ask` question 2 to 8 concrete options; the picker adds the free-form answer itself.",
+			"In every question the recommended option comes first, with `(recommended)` written at the end of " +
+				"its label (`(recomendado)` in Portuguese) — the user sees the default before reading the alternatives.",
 		],
 		parameters: ASK_PARAMS,
 		executionMode: "sequential",
