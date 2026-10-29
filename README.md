@@ -23,7 +23,7 @@ pi-settings/
 | Extension | File | Command | Tools | What it does | Doc |
 |---|---|---|---|---|---|
 | **plan** | `extensions/plan.ts` | `/plan` | `plan_advance`, `plan_title` | Phased planning workflow (`investigate → summary → plan → ready`) with human approval, the plan written straight to a `.md` file, and a fresh session for implementation | [docs/plan.md](docs/plan.md) |
-| **ask** | `extensions/ask/` | — | `ask` | Interactive radio/checkbox question picker with a free-form last option, inline in the editor area; degrades to a prose instruction without a terminal | [docs/ask.md](docs/ask.md) |
+| **ask** | `extensions/ask/` | — | `ask` | Interactive radio/checkbox question picker with a free-form last option, inline in the editor area; the first option is always the recommendation, marked `(recommended)`; degrades to a prose instruction without a terminal | [docs/ask.md](docs/ask.md) |
 
 ### `/plan` in one table
 
@@ -42,6 +42,8 @@ What the extension does and does not protect: `edit`/`write` are blocked in
 `investigate`/`summary`, but `bash` stays allowed — that is a workflow
 convention, not a security boundary.
 
+Prefer working with prompt templates instead? See [Prompt templates](#prompt-templates).
+
 ## Skills
 
 | Skill | Directory | When to use | Doc |
@@ -50,9 +52,15 @@ convention, not a security boundary.
 
 ## Prompt templates
 
-| Command | File | Arguments | What it does |
-|---|---|---|---|
-| _(none yet)_ | — | — | — |
+Two independent templates for hosts where extensions are unavailable or unwanted: `/investigate`
+ends in a report and writes nothing, `/write-plan` turns the investigation in the conversation (or its
+own) into a plan file. Neither one depends on the other. Details and the comparison with `/plan`:
+[docs/plan-prompts.md](docs/plan-prompts.md).
+
+| Command | File | Arguments | What it does | Doc |
+|---|---|---|---|---|
+| `/investigate` | `prompts/investigate.md` | `<task>` | Read-only investigation that exhausts the repository — code, history, tests, config — before asking anything, and asks only decisions that are the user's; ends in a six-part findings report and stops there | [docs/plan-prompts.md](docs/plan-prompts.md) |
+| `/write-plan` | `prompts/write-plan.md` | `[plan-file-path]` | Writes the executable plan **into** `.pi/plans/<stamp>-<slug>.md`, never into the chat; without an argument it derives title and path itself, fills gaps from the repository and asks only real user decisions before writing | [docs/plan-prompts.md](docs/plan-prompts.md) |
 
 ## Install on another machine
 
@@ -68,6 +76,24 @@ pi-bolt update --extensions       # update after a push
 ```
 
 The managed clone lives in `~/.pi/agent/npm/`. Requires the repo to be pushed.
+
+### A2. As a local package (clone stays the source of truth, nothing is copied)
+
+```bash
+pi-bolt install /absolute/path/to/pi-settings   # or a relative one, resolved from the settings file
+pi-bolt list                                    # shows the resolved directory
+```
+
+Pi loads `extensions/`, `skills/`, `prompts/` and `themes/` **straight from that directory**, so an
+edit in the clone needs only `/reload` — no re-install, no copy drifting out of sync, no
+`*.bak-<stamp>` left behind. The path is written to `~/.pi/agent/settings.json` → `packages`.
+
+One thing this mode does not deliver: the `plan-flow/*.md` overrides. That directory is not a Pi
+resource, so the package manifest cannot expose it — copy an override to `~/.pi/agent/plan-flow/` by
+hand when you write one (without any, the extension uses its embedded defaults).
+
+Once `settings.json` mentions `pi-settings`, `scripts/install.*` **refuses to run** on that machine
+(its duplicate-registration guard). That is intended: pick mode A/A2 *or* mode B, never both.
 
 ### B. Cloning the repo (repo = source of truth)
 
