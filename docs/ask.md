@@ -23,14 +23,9 @@ tool result, which is also what `renderResult` redraws from after a resume.
 
 ## When the model should call it
 
-`plan.ts` states the rule in the instructions it injects into every phase
-(`COMMON_RULES`): ask through `ask`, never in prose, batching every question in
-one call. The tool also carries its own `promptSnippet` and `promptGuidelines`,
-so the same rule reaches sessions where no plan flow is running.
-
-> If you create `~/.pi/agent/plan-flow/common.md`, that file **replaces** the
-> embedded rules and the `ask` sentence disappears with it. Copy the sentence
-> into your override (see [`plan-flow/README.md`](../plan-flow/README.md)).
+The tool carries its own `promptSnippet` and `promptGuidelines`, so the rule
+reaches every session without another extension restating it: ask through `ask`,
+never in prose, batching every question in one call.
 
 ### The recommendation goes first
 
@@ -116,8 +111,8 @@ that is a follow-up.
 
 Two more runtime rules, both because a dialog is a hard place to fail:
 
-- `executionMode: "sequential"` — the whole tool batch is serialized, so
-  `plan_advance`'s confirmation can never race with an open picker;
+- `executionMode: "sequential"` — the whole tool batch is serialized, so two
+  `ask` calls can never race with an open picker;
 - the run's abort signal resolves the open picker as cancelled, so a session
   replacement or an aborted run does not leave the terminal owned by a dead tool
   call.
@@ -128,8 +123,8 @@ Two more runtime rules, both because a dialog is a hard place to fail:
 `ask` does not follow that: it is **always active**. A question can be needed in
 any phase of any workflow, and switching it on per feature would need a signal
 that does not exist yet. The cost is one `promptSnippet` line and four
-`promptGuidelines` in every system prompt. `plan.ts` never drops it —
-`syncToolActivation` only touches `plan_advance`/`plan_title`.
+`promptGuidelines` in every system prompt. Nothing toggles the active tool set,
+so nothing has to keep it registered.
 
 ## Test
 
@@ -159,7 +154,7 @@ Rendering and keyboard handling are TUI behavior and are verified by hand after
 5. `Esc` closes from the list, from the editor, and after moving between tabs;
 6. resize the terminal while it is open — nothing exceeds the width and the
    layout reflows;
-7. inside `/plan` investigation, the model asks through `ask` instead of prose.
+7. inside `/investigate`, the model asks through `ask` instead of prose.
 
 ## Known limitations
 

@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Installs this repo's Pi resources into the Pi agent directory.
 #
-# Copies (or symlinks) extensions, skills, prompt templates, themes and plan-flow
-# instruction overrides from this repo into ~/.pi/agent, keeping a timestamped
-# backup of any file that is replaced.
+# Copies (or symlinks) extensions, skills, prompt templates and themes from this
+# repo into ~/.pi/agent, keeping a timestamped backup of any file that is replaced.
 #
 #   ./scripts/install.sh              # copy (default)
 #   ./scripts/install.sh --link       # symlink instead of copy (repo stays the source of truth)
@@ -126,15 +125,6 @@ if [ -d "$ROOT/themes" ]; then
   for file in "$ROOT/themes"/*.json; do
     [ -f "$file" ] || continue
     install_file "$file" "$AGENT_DIR/themes/$(basename "$file")"
-  done
-fi
-
-step "plan-flow overrides"
-if [ -d "$ROOT/plan-flow" ]; then
-  for file in "$ROOT/plan-flow"/*.md; do
-    [ -f "$file" ] || continue
-    [ "$(basename "$file")" = "README.md" ] && continue
-    install_file "$file" "$AGENT_DIR/plan-flow/$(basename "$file")"
   done
 fi
 

@@ -1,13 +1,15 @@
 // Real load check: uses Pi's own extension loader (jiti), no model calls.
 //
-//   node tests/load-check.mjs [extension-file]
+//   node tests/load-check.mjs [extension-file ...]
 //
+// Without arguments it loads every extension in extensions/ (a *.ts file, or a directory holding
+// index.ts), so a new extension is covered by `npm run check` without editing this script.
 // The loader is resolved from, in order:
 //   1. $PI_CODING_AGENT_LOADER (full path to dist/core/extensions/loader.js)
 //   2. the @earendil-works/pi-coding-agent resolved from this directory
 //   3. the global npm root (npm root -g)
 //   4. $PI_BOLT_DIR/node_modules and ~/.pi-bolt/pi-bolt-* (source installs of Pi-Bolt)
-import { existsSync, mkdtempSync, readdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
@@ -78,9 +80,24 @@ if (!loaderPath) {
 
 const { loadExtensions } = await import(pathToFileURL(loaderPath).href);
 
-const defaultTarget = fileURLToPath(new URL("../extensions/plan.ts", import.meta.url));
-const target = process.argv[2] ? fileURLToPath(pathToFileURL(join(here, "..", process.argv[2]))) : defaultTarget;
-const result = await loadExtensions([target], mkdtempSync(join(tmpdir(), "planflow-load-")));
+const defaultTarget = fileURLToPath(new URL("../extensions", import.meta.url));
+
+/** Every extension the package manifest exposes: a `*.ts` file or a directory with `index.ts`. */
+function discoverTargets() {
+	const targets = [];
+	for (const entry of readdirSync(defaultTarget)) {
+		const full = join(defaultTarget, entry);
+		if (entry.endsWith(".ts")) targets.push(full);
+		else if (existsSync(join(full, "index.ts")) && statSync(full).isDirectory()) targets.push(join(full, "index.ts"));
+	}
+	return targets;
+}
+
+const targets = process.argv
+	.slice(2)
+	.map((arg) => fileURLToPath(pathToFileURL(join(here, "..", arg))));
+if (!targets.length) targets.push(...discoverTargets());
+const result = await loadExtensions(targets, mkdtempSync(join(tmpdir(), "pi-ext-load-")));
 
 console.log(`loader: ${loaderPath}`);
 if (result.errors?.length) {

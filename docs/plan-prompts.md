@@ -2,20 +2,19 @@
 
 | | |
 |---|---|
-| Source in this repo | `prompts/investigate.md`, `prompts/write-plan.md` |
+| Source in this repo | `prompts/investigate.md`, `prompts/plan.md` |
 | Installed at | `~/.pi/agent/prompts/` |
-| Commands | `/investigate`, `/write-plan` |
+| Commands | `/investigate`, `/plan` |
 | Tools | none of their own — they are prompt templates, plain text expanded into your message |
 | Doc | this file |
 
-Two independent prompt templates for machines and hosts where the [`plan` extension](plan.md) is not
-installed or not wanted. Neither one knows about the other: `/investigate` writes a report,
-`/write-plan` writes a file, and you choose which to run and when. There is no state and no
-enforcement — the rules live in the prompt, so they hold only as far as the model follows them.
+Two independent prompt templates. Neither one knows about the other: `/investigate` writes a report,
+`/plan` writes a file, and you choose which to run and when. There is no state and no enforcement —
+the rules live in the prompt, so they hold only as far as the model follows them.
 
 ```text
 /investigate <task>   →  a findings report in the chat, and nothing else
-/write-plan [path]    →  the plan, written straight into .pi/plans/<stamp>-<slug>.md
+/plan [path]          →  the plan, written straight into .pi/plans/<stamp>-<slug>.md
 ```
 
 ## Commands
@@ -23,7 +22,7 @@ enforcement — the rules live in the prompt, so they hold only as far as the mo
 | Command | Arguments | What it does |
 |---|---|---|
 | `/investigate` | `<task>` | read-only investigation that exhausts the repository first, asking only decisions that are the user's, and ends in a six-part findings report — the report is the deliverable, and it stops there |
-| `/write-plan` | `[plan-file-path]` | writes the executable plan **into the file**, never into the chat; without an argument it derives subject, title and path itself, fills gaps from the repository and asks only real user decisions before writing |
+| `/plan` | `[plan-file-path]` | writes the executable plan **into the file**, never into the chat; without an argument it derives subject, title and path itself, fills gaps from the repository and asks only real user decisions before writing |
 
 Arguments follow shell-like quoting, so `/investigate "fix the pricing tab autosave"` is one task.
 
@@ -33,7 +32,7 @@ They do not chain. Each command stands on its own:
 
 1. `/investigate` ends with the report in the chat. No file is written, no title is proposed and no
    approval is requested: investigating is a legitimate end state, not a step towards something else.
-2. `/write-plan` works from whatever investigation is in that conversation — from `/investigate`, from
+2. `/plan` works from whatever investigation is in that conversation — from `/investigate`, from
    earlier work in the same session, or from nothing at all. When the context is not enough to plan
    from, it investigates and asks first; when there is no subject at all, it asks what to plan.
 3. Because the plan file is self-contained by design, it can be handed to a different session than
@@ -54,43 +53,29 @@ A question then has to pass four tests: the repository cannot answer it, it belo
 (scope, priority, taste, risk, business rule, external constraint), either answer changes the result,
 and nobody has answered it already. Questions arrive in batches of 1 to 4, each with the finding that
 motivated it, the fork it creates, 2 to 6 concrete options with their consequences, and the option
-the model would pick. Never "which files matter?" or "should I continue?".
-
-## Prompts or extension?
-
-| | `/plan` extension | these prompts |
-|---|---|---|
-| Phase state | real, persisted in the session (`/plan status`, survives resume) | none — each command runs alone and forgets |
-| `edit`/`write` blocked while investigating | yes (and `bash` still allowed, so it is a convention, not a boundary) | no — instruction only |
-| Approvals | dialog + `/plan approve`; a phase never advances by itself | none — nothing to approve, no next command to run |
-| Plan file | created on approval, renamed by `plan_title`, validated before `/plan approve` | created by `/write-plan` from the template's rules; nothing validates it |
-| Status line / widget | yes | no |
-| Works where extensions cannot load | no | yes |
-
-Use the extension where it is installed; use the prompts elsewhere, or when you want a single command
-(one report, or one file) without the dialogs. Do not expect the two to share state: `/plan status`
-knows nothing about a plan written by `/write-plan`, and neither prompt moves the extension's phase.
+the model would pick — first in the list, marked `(recommended)` / `(recomendado)` as the `ask` tool
+requires. Never "which files matter?" or "should I continue?".
 
 ## Name collisions
 
-`/plan` belongs to the extension, which is why no template here is called `plan.md` — an extension
-command with the same name wins, and Pi reports the collision at startup. If you install the example
-`plan-mode` extension, note that it also registers `/plan` and reads `Plan:` / `[DONE:n]` markers from
-the chat; these templates deliberately do not use those markers and track no progress of their own.
+`/plan` is the template, now that the old phased plan extension is gone. A command name is still first
+come, first served: an extension that registers `/plan` wins over the template and Pi reports the
+collision at startup, so check the installed extensions before reusing a name. Do not add a
+`README.md` inside `prompts/` either — it would become a `/README` command.
 
 ## Limitations
 
 - Nothing is enforced. A template is text: if the model edits a file during `/investigate`, no guard
-  stops it. The `plan` extension's guard is the real thing.
-- `/write-plan` without an argument has to judge on its own whether the conversation holds enough
+  stops it.
+- `/plan` without an argument has to judge on its own whether the conversation holds enough
   investigation; a thin context gets a thin plan, and the prompt's "investigate first" rule is the
   only defence.
 - No title validation: the 2-to-4-word rule is a request, not a check, and the file name is whatever
-  the model writes (the extension renames the file when the title changes).
+  the model writes — nothing renames it for you.
 - No approval record and no implementation command. These templates stop at the report and at the
   plan file; hand the file to a session of your choosing.
 - Timestamps come from `date +%Y%m%d-%H%M%S` in the shell; a host without a POSIX `date` needs the
-  path passed explicitly to `/write-plan`.
+  path passed explicitly to `/plan`.
 
 ## Install and test
 

@@ -3,9 +3,8 @@
   Installs this repo's Pi resources into the Pi agent directory.
 
 .DESCRIPTION
-  Copies (or links) extensions, skills, prompt templates, themes and plan-flow
-  instruction overrides from this repo into ~/.pi/agent, keeping a timestamped
-  backup of any file that is replaced.
+  Copies (or links) extensions, skills, prompt templates and themes from this repo
+  into ~/.pi/agent, keeping a timestamped backup of any file that is replaced.
 
   Use this when you want the git repo to be the source of truth on a machine.
   On a machine without the repo checked out, install the repo as a Pi package
@@ -152,15 +151,6 @@ $themeDir = Join-Path $root "themes"
 if (Test-Path $themeDir) {
     Get-ChildItem $themeDir -File -Filter *.json | ForEach-Object {
         Install-File $_.FullName (Join-Path (Join-Path $AgentDir "themes") $_.Name)
-    }
-}
-
-# plan-flow: optional phase instruction overrides read by extensions/plan.ts
-Write-Step "plan-flow overrides"
-$flowDir = Join-Path $root "plan-flow"
-if (Test-Path $flowDir) {
-    Get-ChildItem $flowDir -File -Filter *.md | Where-Object { $_.Name -ne "README.md" } | ForEach-Object {
-        Install-File $_.FullName (Join-Path (Join-Path $AgentDir "plan-flow") $_.Name)
     }
 }
 

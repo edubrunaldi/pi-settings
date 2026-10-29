@@ -4,11 +4,12 @@
  * The user answers with the keyboard in the editor area instead of the model writing questions into
  * its reply. Invariants:
  *
- * - `executionMode: "sequential"`: the whole tool batch is serialized, so no other dialog (the
- *   `plan_advance` confirmation, a second `ask`) can race with the open picker;
+ * - `executionMode: "sequential"`: the whole tool batch is serialized, so no other dialog (a second
+ *   `ask`, or any future dialog tool) can race with the open picker;
  * - always active. This is the deliberate exception to the repo rule that an off-feature tool stays out
- *   of the tool list: a question can be needed in any phase of any workflow, and `plan.ts` never removes
- *   tools it did not add (`syncToolActivation` only touches `PLAN_TOOLS`);
+ *   of the tool list: a question can be needed in any phase of any workflow, and nothing in this repo
+ *   toggles the active tool set (`setActiveTools`) any more — the old plan extension, which used to,
+ *   is gone;
  * - headless degrades, never fails: without a terminal UI the model is told to ask in prose, so a print,
  *   json, rpc or subagent run does not lose the turn;
  * - the picker resolves exactly once — through its own `done`, or as cancelled when the run aborts — so

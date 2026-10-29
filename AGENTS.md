@@ -13,7 +13,6 @@ pi-settings/
 ├── extensions/         # TypeScript extensions: one file, or a directory with index.ts
 ├── skills/             # one directory per skill, each with SKILL.md
 ├── prompts/            # prompt templates: filename == command name
-├── plan-flow/          # phase-instruction overrides for extensions/plan.ts
 ├── themes/             # JSON themes (not created yet)
 ├── docs/               # long-form docs, one file per resource
 ├── tests/              # offline tests + host stubs (tests/stubs)
@@ -54,25 +53,24 @@ Two consumption modes, never both at once on one machine:
    export default function (pi: ExtensionAPI) { /* register tools/commands/events */ }
    ```
    A multi-file extension becomes `extensions/<name>/index.ts`.
-2. Conventions followed by `extensions/plan.ts` — copy them:
+2. Conventions to copy (see `extensions/ask/`):
    - do not start processes/sockets/timers in the factory; use `session_start`;
    - keep tools *out* of the active set while the feature is off
      (`pi.setActiveTools`), so a user-wide install does not change unrelated
-     sessions;
+     sessions; an always-on tool documents its exception in the file header
+     (`extensions/ask/` does);
    - persist state through `pi.appendEntry` and restore from
      `ctx.sessionManager.getBranch()`; keep per-user files under `getAgentDir()`
      or project files under `ctx.cwd`;
    - never infer a human decision — ask through `ctx.ui.confirm`/command;
-   - comment the phase machine / invariants at the top of the file.
+   - comment the state machine, the invariants and the degrade paths at the top
+     of the file.
 3. Documentation goes to `docs/<name>.md`: what it does, command table, files it
    writes, limitations, how to test.
 4. Tests: add a case to `tests/run.mjs` (stub `pi` API, no model calls) and make
    sure `node tests/load-check.mjs` loads it with zero `errors`.
 5. Add the row to the **Extensions** table in `README.md` (file, command, tools,
    purpose, doc link) and any command table it needs.
-6. If the extension reads extra files from the agent dir (like `plan-flow/`),
-   keep those files in a repo directory with the same name and make both install
-   scripts copy them.
 
 ## Add a skill
 
@@ -91,9 +89,10 @@ Two consumption modes, never both at once on one machine:
 
 ## Add a prompt template
 
-1. `prompts/<command>.md` — **the filename is the command** (`prompts/review.md`
-   → `/review`). Do not add a `README.md` inside `prompts/`: it would become a
-   `/README` command.
+1. `prompts/<command>.md` — **the filename is the command** (`prompts/plan.md`
+   → `/plan`). Do not add a `README.md` inside `prompts/`: it would become a
+   `/README` command. An extension command with the same name wins and Pi warns
+   about the collision, so check the installed extensions before reusing a name.
 2. Frontmatter: `description:` (shown in completion) and optional
    `argument-hint:` with `<required>` / `[optional]`.
 3. Use `$1`, `$@`, `${1:-default}`, `${@:N}` for arguments.
@@ -109,8 +108,8 @@ Two consumption modes, never both at once on one machine:
 ```bash
 npm run check                     # behavior tests + real loader check
 node tests/run.mjs                # stub pi API, fake dialogs, no model calls
-node tests/load-check.mjs         # Pi's jiti loader: registration only
-node tests/load-check.mjs extensions/plan.ts
+node tests/load-check.mjs         # Pi's jiti loader: registration only (all extensions)
+node tests/load-check.mjs extensions/ask/index.ts
 ```
 
 `tests/run.mjs` copies `tests/stubs/` into `node_modules/` on first run, so a
@@ -136,9 +135,8 @@ Then restart Pi or `/reload` — a running session keeps the old extension code.
 
 | Symptom | Cause |
 |---|---|
-| `/plan` registered twice, startup warning | repo installed as package **and** copied by the script. Remove one (`pi-bolt remove <source>` or delete the copies). |
+| A resource loaded twice, startup warning | repo installed as package **and** copied by the script. Remove one (`pi-bolt remove <source>` or delete the copies). |
 | Extension change has no effect | `/reload` not run, or you edited the repo while a *copied* install is the loaded one (re-run the script or use `--link`/`-Link`). |
-| Overrides at `plan-flow/*.md` ignored | the extension reads `~/.pi/agent/plan-flow/`, not the repo directory; run the installer. |
 | `typebox`/`@earendil-works` module not found at runtime | those are host-provided; keep them in `peerDependencies`, never `dependencies`. |
 | Test import fails with `ERR_MODULE_NOT_FOUND` | `node_modules/` stubs missing; run `node tests/run.mjs` once (it seeds them) or `rm -rf node_modules` and retry. |
 
