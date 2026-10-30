@@ -31,14 +31,9 @@ pi-settings/
 
 ## Prompt templates
 
-Two independent templates: `/investigate` ends in a report and writes nothing, `/plan` turns the
-investigation in the conversation (or its own) into a plan file. Neither one depends on the other.
-Details: [docs/plan-prompts.md](docs/plan-prompts.md).
-
 | Command | File | Arguments | What it does | Doc |
 |---|---|---|---|---|
-| `/investigate` | `prompts/investigate.md` | `<task>` | Read-only investigation that exhausts the repository — code, history, tests, config — before asking anything, and asks only decisions that are the user's; ends in a six-part findings report and stops there | [docs/plan-prompts.md](docs/plan-prompts.md) |
-| `/plan` | `prompts/plan.md` | `[plan-file-path]` | Writes the executable plan **into** `.pi/plans/<stamp>-<slug>.md`, never into the chat; without an argument it derives title and path itself, fills gaps from the repository and asks only real user decisions before writing | [docs/plan-prompts.md](docs/plan-prompts.md) |
+| _(none yet)_ | — | — | — | — |
 
 ## Install on another machine
 
@@ -105,8 +100,7 @@ files, and warns if the repo is also installed as a package.
 
 ### After installing
 
-Restart Pi or run `/reload` in an open session: the `ask` tool appears in the tool list, and
-`/investigate` and `/plan` appear in the `/` completion.
+Restart Pi or run `/reload` in an open session: the `ask` tool appears in the tool list.
 
 ## Test before installing
 

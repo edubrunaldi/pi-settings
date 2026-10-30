@@ -154,7 +154,8 @@ Rendering and keyboard handling are TUI behavior and are verified by hand after
 5. `Esc` closes from the list, from the editor, and after moving between tabs;
 6. resize the terminal while it is open — nothing exceeds the width and the
    layout reflows;
-7. inside `/investigate`, the model asks through `ask` instead of prose.
+7. whenever an instruction in the conversation calls for a question, the model asks
+   through `ask` instead of prose.
 
 ## Known limitations
 

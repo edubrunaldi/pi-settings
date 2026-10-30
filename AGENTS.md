@@ -89,8 +89,8 @@ Two consumption modes, never both at once on one machine:
 
 ## Add a prompt template
 
-1. `prompts/<command>.md` — **the filename is the command** (`prompts/plan.md`
-   → `/plan`). Do not add a `README.md` inside `prompts/`: it would become a
+1. `prompts/<command>.md` — **the filename is the command** (`prompts/summary.md`
+   → `/summary`). Do not add a `README.md` inside `prompts/`: it would become a
    `/README` command. An extension command with the same name wins and Pi warns
    about the collision, so check the installed extensions before reusing a name.
 2. Frontmatter: `description:` (shown in completion) and optional
