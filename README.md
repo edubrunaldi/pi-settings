@@ -22,12 +22,13 @@ pi-settings/
 | Extension | File | Command | Tools | What it does | Doc |
 |---|---|---|---|---|---|
 | **ask** | `extensions/ask/` | — | `ask` | Interactive radio/checkbox question picker with a free-form last option, inline in the editor area; the first option is always the recommendation, marked `(recommended)`; degrades to a prose instruction without a terminal | [docs/ask.md](docs/ask.md) |
+| **knowledge** | `extensions/knowledge/` | `/knowledge` | `knowledge` | Persistent, source-grounded knowledge base: ingests a YouTube video, article or local file into evidence under `~/.pi/knowledge`, the model distils it into records with citations, and later sessions find and apply them by search | [docs/knowledge.md](docs/knowledge.md) |
 
 ## Skills
 
 | Skill | Directory | When to use | Doc |
 |---|---|---|---|
-| _(none yet)_ | — | — | — |
+| **knowledge** | `skills/knowledge/` | Operating procedure for the `knowledge` tool: search the library before answering, learn only a source the user pointed at, read evidence pages including frames as images, write records with real citations and validation flags, apply them safely in later sessions | [docs/knowledge.md](docs/knowledge.md) |
 
 ## Prompt templates
 
