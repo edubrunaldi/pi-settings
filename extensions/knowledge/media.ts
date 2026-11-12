@@ -92,12 +92,20 @@ export function buildAudioArgs(url: string, outputTemplate = "audio.%(ext)s"): s
 	return [...YT_DLP_JS_FLAGS, "--no-playlist", "-f", "bestaudio/best", "-o", outputTemplate, url];
 }
 
+/** Frames need no audio. Prefer a small video-only stream; retain fallbacks for older sources. */
 export function buildVideoArgs(url: string, maxHeight = 360, outputTemplate = "video.%(ext)s"): string[] {
 	return [
+		"--ignore-config",
 		...YT_DLP_JS_FLAGS,
 		"--no-playlist",
+		"--socket-timeout",
+		"20",
+		"--retries",
+		"2",
+		"--fragment-retries",
+		"2",
 		"-f",
-		`best[height<=${maxHeight}]/worst`,
+		`bestvideo[height<=${maxHeight}]/best[height<=${maxHeight}]/worstvideo/worst`,
 		"-o",
 		outputTemplate,
 		url,

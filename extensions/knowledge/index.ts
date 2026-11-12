@@ -15,9 +15,10 @@
  *   hidden prompt, and the reasoning stays visible in the session that produced it.
  *
  * Invariants:
- * - always active. Deliberate exception to the repo rule that an off feature keeps its tools out of
- *   the active set: a library no session can search is not a library. It stays one tool with a
- *   one-line `promptSnippet`, so the standing context cost is small;
+ * - activation is user-wide and persisted outside session history. Missing/broken state is off;
+ *   off withdraws the tool (including codemode discovery), its rules and the skill advertisement;
+ * - open sessions observe the same activation file; run/turn boundaries and execution reconcile
+ *   again to avoid stale permissions. Already-running operations and history are not erased;
  * - `action=write` refuses a record with no locatable evidence, and refuses a citation to a source
  *   that was never ingested. Fabricated provenance is the one failure that would make the whole
  *   library untrustworthy;
@@ -28,13 +29,14 @@
  * - evidence is paged. A transcript or a long document is handed over within a character budget, so
  *   one call cannot fill the context and hide the frames that matter;
  * - no process, socket or timer is started in the factory. The store is created on first use, and
- *   `session_shutdown` only drops the cached handle;
+ *   `session_start` starts the activation watcher; `session_shutdown` stops it and drops the cache;
  * - headless modes work unchanged: the tool does not need a terminal, and the command degrades to a
  *   no-op notification when there is no UI.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { truncateToVisualLines } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, truncateToVisualLines } from "@earendil-works/pi-coding-agent";
+import { activationPath, readActivation, watchActivation, writeActivation } from "./activation.ts";
 import type { Component } from "@earendil-works/pi-tui";
 import {
 	checkControlledEnglish,
@@ -104,6 +106,20 @@ export default function knowledge(pi: ExtensionAPI) {
 	/** Created on first use, never in the factory: a session may load this extension and never call it. */
 	let store: KnowledgeStore | undefined;
 	let storeError: string | undefined;
+	const statePath = activationPath(getAgentDir());
+	let activation = readActivation(statePath);
+	let stopWatching: (() => void) | undefined;
+
+	function syncActivation(): void {
+		const next = readActivation(statePath);
+		const changed = next.enabled !== activation.enabled;
+		activation = next;
+		if (changed) publishTool();
+	}
+
+	function publishTool(): void {
+		pi.registerTool({ ...toolDefinition, exposure: activation.enabled ? "direct" : "hidden" });
+	}
 
 	function ensureStore(): KnowledgeStore | undefined {
 		if (store) return store;
@@ -125,7 +141,7 @@ export default function knowledge(pi: ExtensionAPI) {
 		return { failure: failure(action, storeError ?? "the knowledge store could not be opened") };
 	}
 
-	pi.registerTool({
+	const toolDefinition: ToolDefinition<typeof KNOWLEDGE_PARAMS, Details> = {
 		name: "knowledge",
 		label: "Knowledge",
 		description:
@@ -151,6 +167,8 @@ export default function knowledge(pi: ExtensionAPI) {
 		annotations: { readOnlyHint: false, openWorldHint: true },
 
 		async execute(_toolCallId, params, signal, onUpdate) {
+			syncActivation();
+			if (!activation.enabled) return failure("knowledge", "Knowledge is off globally. Use /knowledge on to enable it.");
 			const args = params as unknown as Record<string, unknown>;
 			const action = String(args.action ?? "");
 			const progress: Progress = (text, details) => onUpdate?.({ content: [{ type: "text", text }], details });
@@ -199,6 +217,29 @@ export default function knowledge(pi: ExtensionAPI) {
 			if (!details.ok) return linesComponent(theme.fg("error", `${details.action}: ${details.message ?? body}`), 4);
 			return linesComponent(theme.fg("success", headline(details, body)), 3);
 		},
+	};
+	publishTool();
+
+	pi.on("session_start", () => {
+		syncActivation();
+		stopWatching?.();
+		stopWatching = watchActivation(statePath, syncActivation);
+	});
+	pi.on("before_agent_start", (event) => {
+		syncActivation();
+		// The authored skill is hidden by default, including the initial startup prompt.
+		// Pi clones these options per run, so this does not mutate the loaded resource.
+		for (const skill of event.systemPromptOptions.skills) {
+			if (skill.name === "knowledge") skill.disableModelInvocation = !activation.enabled;
+		}
+	});
+	pi.on("turn_start", syncActivation);
+	pi.on("input", (event, ctx) => {
+		syncActivation();
+		if (!activation.enabled && /^\/skill:knowledge(?:\s|$)/.test(event.text.trim())) {
+			ctx.ui.notify("Knowledge is off globally. Use /knowledge on first.", "warning");
+			return { action: "handled" };
+		}
 	});
 
 	// ---------------------------------------------------------------- learn
@@ -694,9 +735,9 @@ export default function knowledge(pi: ExtensionAPI) {
 	// ---------------------------------------------------------------- /knowledge
 
 	pi.registerCommand("knowledge", {
-		description: "Knowledge base: learn a source, search records, inspect jobs and limits",
+		description: "Knowledge base: global on/off, learn a source, search records, inspect jobs and limits",
 		getArgumentCompletions: (prefix: string) => {
-			const subs = ["learn", "search", "status", "jobs", "sources", "config", "path"];
+			const subs = ["on", "off", "learn", "search", "status", "jobs", "sources", "config", "path"];
 			const parts = prefix.trim().split(/\s+/);
 			if (parts.length <= 1) {
 				const items = subs.filter((sub) => sub.startsWith(parts[0] ?? "")).map((value) => ({ value, label: value }));
@@ -717,10 +758,36 @@ export default function knowledge(pi: ExtensionAPI) {
 		},
 		handler: async (args, ctx) => {
 			const raw = String(args ?? "").trim();
-			const sub = (raw.split(/\s+/)[0] ?? "status").toLowerCase();
+			const sub = (raw.split(/\s+/)[0] || "status").toLowerCase();
 			const rest = raw.slice(raw.split(/\s+/)[0]?.length ?? 0).trim();
+			syncActivation();
+
+			if (sub === "on" || sub === "off") {
+				if (rest) {
+					ctx.ui.notify("Usage: /knowledge on | /knowledge off", "warning");
+					return;
+				}
+				try {
+					writeActivation(statePath, sub === "on");
+					syncActivation();
+					ctx.ui.notify(`Knowledge ${activation.enabled ? "on" : "off"} globally (saved for all sessions).`, "info");
+				} catch (error) {
+					ctx.ui.notify(`Could not save knowledge activation: ${(error as Error).message}`, "error");
+				}
+				return;
+			}
+
+			if (sub === "status") {
+				ctx.ui.notify(`Knowledge ${activation.enabled ? "on" : "off"} globally · ${statePath}`, "info");
+				if (activation.error) ctx.ui.notify(activation.error, "warning");
+				if (!activation.enabled) return;
+			}
 
 			if (sub === "learn") {
+				if (!activation.enabled) {
+					ctx.ui.notify("Knowledge is off globally. Use /knowledge on first.", "warning");
+					return;
+				}
 				if (!rest) {
 					ctx.ui.notify("Usage: /knowledge learn <url | yt:ID | file:path> [focus]", "warning");
 					return;
@@ -798,6 +865,8 @@ export default function knowledge(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", () => {
+		stopWatching?.();
+		stopWatching = undefined;
 		// Drop the cached handle so a reload or a session switch re-reads the config from disk.
 		store = undefined;
 		storeError = undefined;

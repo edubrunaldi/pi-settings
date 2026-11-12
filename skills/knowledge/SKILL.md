@@ -1,5 +1,6 @@
 ---
 name: knowledge
+disable-model-invocation: true
 description: Operating procedure for the persistent, source-grounded knowledge base behind the `knowledge` tool. Use when the user asks to learn from a video, article or document, when a question may be covered by a source already learned, and before applying or saving any durable procedure, fix or reference. Covers searching the library first, ingesting a source, reading evidence pages (transcript, sections, frames as images), writing records with real citations, and applying records safely in later sessions.
 ---
 

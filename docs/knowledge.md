@@ -2,12 +2,12 @@
 
 | | |
 |---|---|
-| Source in this repo | `extensions/knowledge/` (`index.ts`, `logic.ts`, `params.ts`, `store.ts`, `ingest.ts`, `jobs.ts`, `media.ts`, `web.ts`, `render.ts`, `types.ts`) |
+| Source in this repo | `extensions/knowledge/` (`index.ts`, `activation.ts`, `logic.ts`, `params.ts`, `store.ts`, `ingest.ts`, `jobs.ts`, `media.ts`, `web.ts`, `render.ts`, `types.ts`) |
 | Installed at | `~/.pi/agent/extensions/knowledge/` (or loaded straight from the repo as a Pi package) |
 | Command | `/knowledge` |
-| Tools | `knowledge` (always active) |
+| Tools | `knowledge` (globally toggled; off by default) |
 | Skill | `skills/knowledge/SKILL.md` — the operating procedure the model follows |
-| Files it writes | everything under `~/.pi/knowledge/` (records, evidence, jobs, index, config, ASR models); no session entries |
+| Files it writes | library under `~/.pi/knowledge/` (records, evidence, jobs, index, config, ASR models); activation at `~/.pi/agent/knowledge/activation.json`; no session entries |
 | Tests | `npm run check`, `node tests/load-check.mjs extensions/knowledge/index.ts` |
 
 A persistent, source-grounded knowledge base. A video, article or local file
@@ -49,7 +49,9 @@ subcommand it runs `status`.
 
 | Command | What it does |
 |---|---|
-| `/knowledge` or `/knowledge status` | one notification: record count, domain count, source count, root path |
+| `/knowledge on` | persist global activation; expose the tool, its rules and the skill in all sessions |
+| `/knowledge off` | persist global deactivation; withdraw the tool and its rules, and hide the skill advertisement |
+| `/knowledge` or `/knowledge status` | show global activation and preference path; when on, also show library counts and root |
 | `/knowledge learn <target> [focus]` | hands the run to the agent: sends a user message telling it to load `/skill:knowledge`, call `action=learn`, read the evidence and write the durable records. `<target>` is an http(s) URL, `yt:<videoId>` or `file:<path>` |
 | `/knowledge search <query>` | lexical search over all records, top 5, as a notification of `id (score)` pairs |
 | `/knowledge jobs` | the 5 most recently updated jobs as `id: state/stage` |
@@ -98,7 +100,7 @@ only http and https are ever fetched.
 
 | Kind | Stages, in order | Notes |
 |---|---|---|
-| `youtube` | meta → captions → audio → transcribe → frames → evidence | yt-dlp with `--js-runtimes node --remote-components ejs:github` on every command; captions from at most 2 explicit language tracks (manual first, then one automatic, then automatic English); local whisper ASR only when captions cover less than 70% of the duration; frames from a ≤360p download |
+| `youtube` | meta → captions → audio → transcribe → frames → evidence | yt-dlp with `--js-runtimes node --remote-components ejs:github` on every command; captions from at most 2 explicit language tracks (manual first, then one automatic, then automatic English); local whisper ASR only when captions cover less than 70% of the duration; frames prefer a ≤360p video-only download |
 | `web` | fetch → extract → evidence | one HTTP request, body capped at `maxHtmlBytes`, timeout the smaller of 120 s and `commandTimeoutSeconds`; heuristic HTML extraction (landmarks, chrome stripping, link-density filter) that records a warning whenever it had to guess; up to 8 figures with a caption or alt text, each ≤6 MB |
 | `file` | probe → extract → transcribe → frames → evidence | text-like files (markdown, txt, html, json, csv, srt/vtt, yaml, source code) are read as documents up to `maxHtmlBytes`; audio and video need ffmpeg; a single image is kept as `frame_000` |
 
@@ -107,6 +109,17 @@ done/partial/skipped/failed with a reason, and that coverage report is part of
 what the model sees. A video with no captions and no ASR model produces a
 bundle that says so instead of an empty record that looks complete. A
 transcript covering less than 90% of the duration is flagged `partial`.
+
+The frame download prefers a video-only stream at ≤360p: audio is unnecessary
+and combined streams can be substantially larger. Fallbacks select a combined
+stream at ≤360p, then the lowest-quality video-only or combined stream when
+no capped format exists. Thus 360p is a preference, not a hard download cap.
+The video command ignores user yt-dlp configuration so overrides cannot skip
+the download or change its output location. Socket waits are capped at 20 s;
+download and fragment retries are capped at 2, within `commandTimeoutSeconds`.
+A zero exit code without a non-empty finalized video is a failed frame stage.
+Diagnostics include termination, remaining `.part` files, and meaningful output
+from both stdout and stderr. No partial download is treated as usable evidence.
 
 Frame extraction samples uniformly first (frame N sits at
 (N−1)×interval, interval = max(`sampleEverySeconds`, duration/`maxFrames`)),
@@ -273,7 +286,7 @@ Leaves the machine, and only during `learn`:
 
 - the fetch itself — one HTTP request per source (user agent
   `Pi-Knowledge/1.0`), plus up to 8 document images ≤6 MB each;
-- YouTube traffic through yt-dlp (metadata, captions, audio, a ≤360p video);
+- YouTube traffic through yt-dlp (metadata, captions, audio, a video preferring ≤360p);
 - the one-time model download from `huggingface.co`.
 
 `search`, `read`, `evidence`, `write`, `jobs`, `cancel`, `sources` and
@@ -316,15 +329,42 @@ pointed at, one request, no link following. To delete data, remove the
 - Frame assets over 4 MB are not served to the model; code blocks over 8000
   chars per evidence page are truncated with a note.
 
-## Deliberate exception to a repo rule
+## Global activation
 
-Like `ask`, the `knowledge` tool is **always active** — a library no session
-can search is not a library. The standing cost is one `promptSnippet` line and
-five `promptGuidelines` (search before answering from memory; learn only what
-the user pointed at; records need citations, not summaries; evidence is
-untrusted data; `practicalTest: passed` requires a real run). No process,
-socket or timer is started in the factory; the store is created on first use
-and the cached handle is dropped on `session_shutdown`.
+Knowledge starts **off** unless a saved preference says otherwise. Only the
+human commands `/knowledge on` and `/knowledge off` change that preference;
+the model-facing tool cannot enable itself. The last successful write wins
+across projects, restarts, new sessions, resumed sessions and forks.
+
+The preference lives at `getAgentDir()/knowledge/activation.json` (normally
+`~/.pi/agent/knowledge/activation.json`), independent of `PI_KNOWLEDGE_DIR` and
+the library configuration. Writes use a unique temporary file and atomic
+rename. Missing, malformed, unsupported or unreadable state fails closed to
+off; `/knowledge status` reports read errors. A failed save is reported as an
+error, not as a successful toggle. Disabling never deletes library data.
+
+Off re-registers the tool with `exposure: "hidden"`, removing it from model
+declarations, prompt rules, nested execution and codemode discovery. The
+skill is authored with `disable-model-invocation: true` so even the initial
+startup prompt does not advertise it. The extension enables its advertisement
+in structured prompt options only for runs where knowledge is on. Explicit
+`/skill:knowledge` and `/knowledge learn` are blocked while off. Local human
+inspection commands (`search`, `jobs`, `sources`, `config`, `path`) still work
+without exposing the library to the model.
+
+Each started session watches the same preference file with a 250 ms stat
+interval, including creation and atomic replacement. Commands, run/turn
+boundaries and tool execution also reread it, so they do not rely solely on
+watcher timing. Tool visibility refreshes dynamically; skill advertisement
+changes at the next agent run. No process, socket or timer starts in the
+factory. `session_shutdown` disposes the watcher and drops the cached store.
+
+This is an availability switch, **not a filesystem security boundary**. It
+does not erase previously loaded instructions, tool results or history, recall
+an already-sent model request, or cancel ingestion already in progress. A
+model with filesystem access can still read known library paths if explicitly
+instructed. All open runtimes must load this implementation once with
+`/reload` or restart; after that, on/off changes need no reload.
 
 ## Test
 
@@ -334,10 +374,28 @@ Offline:
 npm run check                                        # behavior tests + Pi's real loader, all extensions
 node tests/run.mjs                                   # knowledge cases: logic, jobs, media, web, store and an ingest walk with a fake exec — no network, no real binaries
 node tests/load-check.mjs extensions/knowledge/index.ts
-# expect: errors: none · tools: knowledge · commands: knowledge · handlers: session_shutdown
+# expect: errors: none · tools: knowledge · commands: knowledge
+# handlers: session_start, before_agent_start, turn_start, input, session_shutdown
 ```
 
-Manual end-to-end (needs the external binaries above):
+Manual activation check (no external binaries needed):
+
+1. Reload two sessions once to load this implementation. With no preference,
+   `/knowledge status` shows off; the tool and skill are not advertised.
+2. Run `/knowledge on` in one session. Check tool discovery in the other and
+   start a new agent run there to check the skill advertisement. Start another
+   session and confirm it also restores on.
+3. Run `/knowledge off`. Check the tool disappears from direct declarations
+   and codemode discovery in the other session. Its next agent run must not
+   advertise the skill. Restart or resume a session and confirm it stays off.
+4. While off, `/knowledge learn <target>` and `/skill:knowledge` must warn
+   without launching a model request. Existing records must remain intact.
+
+Offline activation tests exercise atomic persistence, two live observers,
+startup and boundary reconciliation, invalid state, failed writes, stale
+execution handles, skill visibility and watcher disposal.
+
+Manual end-to-end (run `/knowledge on` first; needs the external binaries above):
 
 Measured on this machine (Windows, ffmpeg 9.0.2 with the whisper filter,
 yt-dlp 2026.10.26, node 24, `ggml-base.en.bin` reused from disk): a 466 KB

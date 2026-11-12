@@ -110,7 +110,7 @@ const clock = (): number => Date.now();
 function findFile(dir: string, prefix: string, extensions: RegExp): string | undefined {
 	if (!existsSync(dir)) return undefined;
 	const match = readdirSync(dir)
-		.filter((file) => file.startsWith(prefix) && extensions.test(file))
+		.filter((file) => file.startsWith(prefix) && extensions.test(file) && statSync(join(dir, file)).isFile() && statSync(join(dir, file)).size > 0)
 		.sort((a, b) => statSync(join(dir, b)).size - statSync(join(dir, a)).size);
 	return match.length ? join(dir, match[0]) : undefined;
 }
@@ -683,7 +683,7 @@ async function ingestYoutube(
 			deps,
 			current,
 			"frames",
-			async () => {
+			async (note) => {
 				if (!tools.ffmpeg) return { status: "skipped", detail: "ffmpeg was not found" };
 				const cachedFrames = readCachedFrames(join(workdir, "frames.json"), assets);
 				if (cachedFrames) {
@@ -692,9 +692,16 @@ async function ingestYoutube(
 				}
 				let video = work.videoFile ?? findFile(workdir, "video.", VIDEO_EXTENSIONS);
 				if (!video) {
+					note("downloading a video-only stream for frames (preferred height ≤360p)");
 					const result = await yt(buildVideoArgs(url, 360), limits.commandTimeoutSeconds * 1000);
+					assertNotAborted(signal);
 					video = findFile(workdir, "video.", VIDEO_EXTENSIONS);
-					if (!video) return { status: "failed", detail: `no video file for frame extraction (yt-dlp exit ${result.code}): ${logTail(result.stderr)}` };
+					if (!video) {
+						const partial = findFiles(workdir, /^video\..*\.part$/i).length ? "; incomplete .part download remains" : "";
+						const stopped = result.killed ? "; process stopped (timeout or termination)" : "";
+						const logs = logTail(`${result.stdout}\n${result.stderr}`) || "no diagnostic output";
+						return { status: "failed", detail: `no video file for frame extraction (yt-dlp exit ${result.code}${stopped}${partial}): ${logs}` };
+					}
 				}
 				work.videoFile = video;
 				work.frames = await extractFrames(deps, video, workdir, assets, work.durationSeconds, signal);

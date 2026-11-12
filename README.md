@@ -22,13 +22,14 @@ pi-settings/
 | Extension | File | Command | Tools | What it does | Doc |
 |---|---|---|---|---|---|
 | **ask** | `extensions/ask/` | — | `ask` | Interactive radio/checkbox question picker with a free-form last option, inline in the editor area; the first option is always the recommendation, marked `(recommended)`; degrades to a prose instruction without a terminal | [docs/ask.md](docs/ask.md) |
-| **knowledge** | `extensions/knowledge/` | `/knowledge` | `knowledge` | Persistent, source-grounded knowledge base: ingests a YouTube video, article or local file into evidence under `~/.pi/knowledge`, the model distils it into records with citations, and later sessions find and apply them by search | [docs/knowledge.md](docs/knowledge.md) |
+| **knowledge** | `extensions/knowledge/` | `/knowledge on\|off`, `/knowledge status` | `knowledge` (off by default) | User-wide activation persists and syncs across sessions; off hides the tool, rules and skill. Persistent, source-grounded knowledge base: ingests a YouTube video, article or local file into evidence under `~/.pi/knowledge`, the model distils it into records with citations, and later sessions find and apply them by search | [docs/knowledge.md](docs/knowledge.md) |
+| **new-session** | `extensions/new-session/` | `/new-session` | none | Replaces this session with a new one on a model and thinking level you choose, with the first input already sent: shortlist or search the catalogue, pick a level the model supports, take the last assistant message (or an LLM-written handoff of it, or your own text), confirm | [docs/new-session.md](docs/new-session.md) |
 
 ## Skills
 
 | Skill | Directory | When to use | Doc |
 |---|---|---|---|
-| **knowledge** | `skills/knowledge/` | Operating procedure for the `knowledge` tool: search the library before answering, learn only a source the user pointed at, read evidence pages including frames as images, write records with real citations and validation flags, apply them safely in later sessions | [docs/knowledge.md](docs/knowledge.md) |
+| **knowledge** | `skills/knowledge/` | Advertised only while globally enabled with `/knowledge on`. Operating procedure for the `knowledge` tool: search the library before answering, learn only a source the user pointed at, read evidence pages including frames as images, write records with real citations and validation flags, apply them safely in later sessions | [docs/knowledge.md](docs/knowledge.md) |
 
 ## Prompt templates
 
@@ -101,7 +102,8 @@ files, and warns if the repo is also installed as a package.
 
 ### After installing
 
-Restart Pi or run `/reload` in an open session: the `ask` tool appears in the tool list.
+Restart Pi or run `/reload` in an open session: the `ask` tool appears in the tool list
+and `/new-session` appears in the command list.
 
 ## Test before installing
 

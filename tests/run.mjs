@@ -471,6 +471,7 @@ const {
 	buildSceneFrameArgs,
 	buildSubtitleArgs,
 	buildUniformFrameArgs,
+	buildVideoArgs,
 	dedupeSegments,
 	isUsableCaptionLanguage,
 	KNOWN_WHISPER_MODELS,
@@ -552,6 +553,16 @@ assert.deepEqual(noPlan.langs, []);
 assert.match(noPlan.reason, /no caption tracks/);
 const fallbackPlan = planSubtitles({ automatic_captions: { de: [] } }, ["en"]);
 assert.deepEqual(fallbackPlan.langs, ["de"], "a non-matching track still beats no transcript");
+
+// Video downloads prefer a small audio-free stream and ignore user download overrides.
+const videoArgs = buildVideoArgs("u");
+assert.equal(videoArgs[videoArgs.indexOf("-f") + 1], "bestvideo[height<=360]/best[height<=360]/worstvideo/worst");
+assert.ok(videoArgs.includes("--ignore-config"));
+assert.equal(videoArgs[videoArgs.indexOf("--socket-timeout") + 1], "20");
+assert.equal(videoArgs[videoArgs.indexOf("--retries") + 1], "2");
+assert.equal(videoArgs[videoArgs.indexOf("--fragment-retries") + 1], "2");
+assert.ok(buildVideoArgs("u", 240, "custom.%(ext)s").includes("bestvideo[height<=240]/best[height<=240]/worstvideo/worst"));
+assert.ok(buildVideoArgs("u", 240, "custom.%(ext)s").includes("custom.%(ext)s"));
 
 // ffmpeg invocations
 assert.deepEqual(buildMetaArgs("u"), ["--js-runtimes", "node", "--remote-components", "ejs:github", "--no-playlist", "--no-warnings", "-J", "u"]);
@@ -804,9 +815,13 @@ function makeFakeExec(options = {}) {
 			write(join(cwd, "audio.webm"), Buffer.alloc(2048, 3));
 			return ok();
 		}
-		if (/yt_dlp/.test(joined) && /best\[height<=/.test(joined)) {
-			if (options.video !== false) write(join(cwd, "video.mp4"), Buffer.alloc(4096, 4));
-			return ok();
+		if (/yt_dlp/.test(joined) && /bestvideo\[height<=/.test(joined)) {
+			if (options.video === "partial") {
+				write(join(cwd, "video.mp4.part"), Buffer.alloc(4096, 4));
+				return ok({ killed: true, stdout: "Transfer stopped before completion" });
+			}
+			if (options.video !== false) write(join(cwd, "video.mp4"), Buffer.alloc(options.video === "empty" ? 0 : 4096, 4));
+			return ok(options.video === false ? { stdout: "ERROR: video download unavailable" } : {});
 		}
 		if (command === "ffmpeg" && /whisper=/.test(joined)) {
 			if (options.asr === false) return ok({ stderr: "Error opening output file -" });
@@ -884,6 +899,26 @@ assert.equal(forced.bundle.transcript.origin, "asr", "ASR fills the gap");
 assert.equal(forced.job.stages.transcribe.status, "done");
 assert.ok(forced.bundle.frames.length > 0);
 assert.ok(existsSync(ingestStore.modelPath("ggml-test.bin")), "the ASR model was fetched once and cached");
+
+// Exit code zero does not establish success: require a non-empty finalized video.
+for (const mode of [false, "partial", "empty"]) {
+	const noVideo = await ingestSource(
+		{ store: createStore(join(knowledgeRoot, `ingest-video-${mode}`)), exec: makeFakeExec({ video: mode }) },
+		{ target: videoUrl },
+	);
+	assert.equal(noVideo.job.stages.frames.status, "failed");
+	assert.equal(noVideo.bundle.frames?.length ?? 0, 0);
+	assert.match(noVideo.job.stages.frames.detail, /no video file for frame extraction/);
+	if (mode === "partial") {
+		assert.match(noVideo.job.stages.frames.detail, /timeout or termination/);
+		assert.match(noVideo.job.stages.frames.detail, /incomplete \.part/);
+		assert.match(noVideo.job.stages.frames.detail, /Transfer stopped/);
+	} else if (mode === false) {
+		assert.match(noVideo.job.stages.frames.detail, /video download unavailable/);
+	} else {
+		assert.match(noVideo.job.stages.frames.detail, /no diagnostic output/);
+	}
+}
 
 const noMeta = await ingestSource(
 	{ store: createStore(join(knowledgeRoot, "ingest-fail")), exec: makeFakeExec({ meta: null }) },
@@ -1046,6 +1081,13 @@ console.log("OK - knowledge ingestion tests passed");
 // ---------------------------------------------------------------- knowledge: the Pi surface
 
 const { default: knowledgeFactory } = await import("../extensions/knowledge/index.ts");
+const { testKnowledgeActivation } = await import("./knowledge-activation.mjs");
+await testKnowledgeActivation(knowledgeFactory);
+const { activationPath, writeActivation } = await import("../extensions/knowledge/activation.ts");
+const knowledgeAgentRoot = mkdtempSync(join(tmpdir(), "pi-knowledge-agent-"));
+const previousKnowledgeAgentOverride = process.env.PI_AGENT_DIR_OVERRIDE;
+process.env.PI_AGENT_DIR_OVERRIDE = knowledgeAgentRoot;
+writeActivation(activationPath(knowledgeAgentRoot), true);
 
 const kTools = {};
 const kCommands = {};
@@ -1075,7 +1117,7 @@ const tool = kTools.knowledge;
 assert.ok(tool, "the knowledge tool is registered");
 assert.ok(tool.promptSnippet, "a promptSnippet keeps it discoverable in the system prompt");
 assert.ok(tool.promptGuidelines.length >= 4, "the tool ships its usage rules");
-assert.equal(tool.defaultActive, undefined, "always active by design, like ask — documented in the file header");
+assert.equal(tool.exposure, "direct", "the saved global on choice exposes the tool");
 assert.equal(tool.annotations.openWorldHint, true);
 assert.ok(kCommands.knowledge, "the /knowledge command is registered");
 assert.ok(kHandlers.session_shutdown?.length, "a shutdown handler drops the cached store");
@@ -1287,6 +1329,529 @@ assert.match(
 );
 
 delete process.env.PI_KNOWLEDGE_DIR;
+if (previousKnowledgeAgentOverride === undefined) delete process.env.PI_AGENT_DIR_OVERRIDE;
+else process.env.PI_AGENT_DIR_OVERRIDE = previousKnowledgeAgentOverride;
+rmSync(knowledgeAgentRoot, { recursive: true, force: true });
 for (const dir of [knowledgeRoot, emptyRoot, mediaRoot]) rmSync(dir, { recursive: true, force: true });
 
 console.log("OK - knowledge smoke tests passed");
+
+// ---------------------------------------------------------------- new-session (extensions/new-session/)
+//
+// Offline: no terminal, no model call. The dialogs, the model catalogue and the session replacement are
+// faked. The fake `newSession` runs the steps in the order Pi runs them — the new instance's
+// `session_start` first, then `withSession` — because that ordering is the whole reason the chosen model
+// travels through a mailbox instead of being set from the session that is being replaced.
+
+const nsLogic = await import("../extensions/new-session/logic.ts");
+const { default: nsFactory } = await import("../extensions/new-session/index.ts");
+
+const nsAgentDir = mkdtempSync(join(tmpdir(), "pi-new-session-"));
+const nsRecentPath = join(nsAgentDir, "new-session", "recent-models.json");
+process.env.PI_AGENT_DIR_OVERRIDE = nsAgentDir;
+
+/** Rows for the pure matching rules: same id on three providers, one without credentials. */
+const nsRows = [
+	{ provider: "anthropic", id: "claude-opus-4-1", name: "Opus 4.1", authed: true },
+	{ provider: "anthropic", id: "claude-sonnet-4-5", name: "Sonnet 4.5", authed: true },
+	{ provider: "vertex", id: "claude-sonnet-4-5", name: "Sonnet 4.5 via Vertex", authed: true },
+	{ provider: "github-copilot", id: "claude-sonnet-4-5", name: "Sonnet 4.5", authed: false },
+	{ provider: "openrouter", id: "qwen/qwen3-coder:exacto", name: "Qwen3 Coder", authed: true },
+];
+
+/** Models as Pi exposes them, so the stub's thinking-level rules decide what the flow may offer. */
+const nsModels = [
+	{ provider: "anthropic", id: "claude-opus-4-1", name: "Opus 4.1", reasoning: true, thinkingLevelMap: { xhigh: undefined, max: undefined }, authed: true },
+	{ provider: "anthropic", id: "claude-sonnet-4-5", name: "Sonnet 4.5", reasoning: false, authed: true },
+	{ provider: "vertex", id: "claude-sonnet-4-5", name: "Sonnet 4.5 via Vertex", reasoning: false, authed: true },
+	{ provider: "github-copilot", id: "claude-sonnet-4-5", name: "Sonnet 4.5", reasoning: false, authed: false },
+	{ provider: "openrouter", id: "qwen/qwen3-coder:exacto", name: "Qwen3 Coder", reasoning: true, thinkingLevelMap: { minimal: null, low: "low", high: "high" }, authed: true },
+	{ provider: "boom", id: "gone", name: "Boom", reasoning: false, authed: true },
+];
+
+// 1. argument grammar: two flags anywhere, everything else stays the text
+const nsPlain = nsLogic.parseArgs("fix  the flaky  test");
+assert.equal(nsPlain.prompt, "fix  the flaky  test", "spacing inside the text is kept");
+assert.equal(nsPlain.modelPattern, undefined);
+assert.equal(nsPlain.error, undefined);
+const nsFlags = nsLogic.parseArgs("--model opus:high start over --effort low");
+assert.equal(nsFlags.modelPattern, "opus:high", "a flag before the text is read as a flag");
+assert.equal(nsFlags.effort, "low");
+assert.equal(nsFlags.prompt, "start over");
+assert.equal(nsLogic.parseArgs("--model=anthropic/claude-opus-4-1 hello").modelPattern, "anthropic/claude-opus-4-1", "the = form works");
+assert.match(nsLogic.parseArgs("--effort turbo go").error, /--effort must be one of/);
+assert.match(nsLogic.parseArgs("--model opus --model sonnet go").error, /--model given twice/);
+assert.match(nsLogic.parseArgs("--model").error, /--model needs a value/);
+assert.match(nsLogic.parseArgs("--nope go").error, /unknown flag --nope/);
+assert.equal(nsLogic.parseArgs("").prompt, "", "no arguments means the flow asks for the input");
+assert.equal(nsLogic.asThinkingLevel("XHIGH"), "xhigh", "levels are case-insensitive");
+assert.equal(nsLogic.asThinkingLevel("ultra"), undefined);
+assert.deepEqual(nsLogic.splitLevelSuffix("claude-opus:high"), { base: "claude-opus", effort: "high" });
+assert.equal(nsLogic.splitLevelSuffix("qwen/qwen3-coder:exacto"), undefined, "a provider colon is not a level");
+
+// 2. pattern matching: exact ids, credential preference, colons that belong to the id
+assert.equal(nsLogic.matchPattern("anthropic/claude-opus-4-1", nsRows).status, "ok");
+assert.equal(nsLogic.matchPattern("claude-opus-4-1", nsRows).rows[0].provider, "anthropic", "a bare id resolves when unique");
+const nsAmbiguous = nsLogic.matchPattern("claude-sonnet-4-5", nsRows);
+assert.equal(nsAmbiguous.status, "ambiguous", "three providers offer this id");
+assert.equal(nsAmbiguous.rows.length, 2, "and the one without credentials is not offered");
+assert.equal(nsLogic.matchPattern("sonnet", nsRows).status, "ambiguous", "a substring reaches several models");
+assert.equal(nsLogic.matchPattern("Opus 4", nsRows).rows[0].id, "claude-opus-4-1", "the display name is searchable");
+assert.equal(nsLogic.matchPattern("anthropic/claude-opus-4-1:high", nsRows).effort, "high", "a level suffix travels with it");
+const nsColonId = nsLogic.matchPattern("qwen/qwen3-coder:exacto", nsRows);
+assert.equal(nsColonId.status, "ok", "a provider colon stays inside the id");
+assert.equal(nsColonId.effort, undefined);
+assert.equal(nsColonId.rows[0].provider, "openrouter");
+assert.equal(nsLogic.matchPattern("github-copilot/claude-sonnet-4-5", nsRows).status, "no-auth", "an exact match without credentials is reported, never started");
+assert.equal(nsLogic.matchPattern("nothing-here", nsRows).status, "none");
+assert.equal(nsLogic.matchPattern("   ", nsRows).status, "none");
+
+// 3. the shortlist: current first, then recent, then scoped, then whatever else has credentials
+const nsList = nsLogic.shortlist({
+	all: nsRows,
+	current: { provider: "vertex", id: "claude-sonnet-4-5" },
+	recent: [{ provider: "anthropic", id: "claude-opus-4-1" }],
+	scoped: [{ provider: "openrouter", id: "qwen/qwen3-coder:exacto" }],
+	defaultModel: { provider: "anthropic", id: "claude-opus-4-1" },
+});
+assert.deepEqual(nsList.map(nsLogic.modelKey).slice(0, 3), [
+	"vertex/claude-sonnet-4-5",
+	"anthropic/claude-opus-4-1",
+	"openrouter/qwen/qwen3-coder:exacto",
+]);
+assert.equal(nsList.length, 4, "the remaining credentialed model fills the list, and no ref is listed twice");
+assert.equal(nsLogic.modelKey(nsList[3]), "anthropic/claude-sonnet-4-5");
+const nsPickerRows = nsLogic.modelPickerRows(nsList);
+assert.equal(nsPickerRows.at(-1), nsLogic.SEARCH_ROW, "the search row is always last");
+assert.equal(nsPickerRows[0], `* ${nsLogic.modelKey(nsList[0])}`, "the current model is the marked default");
+assert.equal(nsLogic.rowValue(nsPickerRows[0]), "vertex/claude-sonnet-4-5", "the mark comes off the value");
+assert.deepEqual(nsLogic.modelPickerRows([]), [nsLogic.SEARCH_ROW], "an unknown model still gets a search");
+assert.deepEqual(nsLogic.candidateRows(nsAmbiguous.rows), ["anthropic/claude-sonnet-4-5", "vertex/claude-sonnet-4-5"]);
+
+// 4. effort: canonical order, the chosen row marked, and a level the model does not have explained
+const nsSupported = ["off", "minimal", "low", "medium", "high"];
+assert.deepEqual(nsLogic.effortRows(nsSupported, "high"), ["off", "minimal", "low", "medium", "* high"]);
+assert.deepEqual(nsLogic.effortRows(["off"], "off"), ["* off"]);
+assert.equal(nsLogic.pickEffort({ supported: nsSupported, requested: "low" }), "low");
+assert.equal(nsLogic.pickEffort({ supported: nsSupported, perModelSetting: "minimal", sessionLevel: "high" }), "minimal", "the level saved for that model beats this session's");
+assert.equal(nsLogic.pickEffort({ supported: nsSupported, sessionLevel: "xhigh" }), "medium", "a level this model lacks is not carried over");
+assert.equal(nsLogic.pickEffort({ supported: ["low", "minimal"] }), "low", "otherwise the first level it has");
+assert.equal(nsLogic.pickEffort({ supported: [] }), "off", "and off when there is nothing");
+assert.equal(nsLogic.clampToSupported("max", nsSupported), "high", "clamped down to the closest level it has");
+assert.equal(nsLogic.clampToSupported("off", ["high", "max"]), "high", "clamped up before it is clamped down");
+
+// 5. reading the branch: what the handoff writer sees, and what it never sees
+const nsBranch = [
+	{ type: "model_change", provider: "anthropic", modelId: "claude-opus-4-1" },
+	{ type: "message", message: { role: "user", content: [{ type: "text", text: "split the loader" }] } },
+	{ type: "compaction", summary: "earlier work on the loader" },
+	{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "1. extract logic\n2. add tests" }] } },
+	{ type: "message", message: { role: "toolResult", content: [{ type: "text", text: "ok" }] } },
+];
+assert.equal(nsLogic.lastAssistantText(nsBranch), "1. extract logic\n2. add tests");
+assert.equal(nsLogic.lastAssistantText([]), undefined, "a session that never answered has nothing to hand off");
+assert.deepEqual(nsLogic.turnTexts(nsBranch).map((turn) => turn.role), ["user", "summary", "assistant"], "a compaction summary reads as its own turn");
+const nsBudget = nsLogic.turnTexts(nsBranch, { turns: 2, charsPerTurn: 5, totalChars: 20 });
+assert.equal(nsBudget.length, 2, "the budget keeps the newest turns");
+assert.equal(nsBudget[1].role, "assistant");
+assert.equal(nsBudget[1].text, "1. ex…", "a long turn is cut, not dropped");
+assert.equal(nsLogic.contentText("  plain string  "), "plain string");
+assert.equal(nsLogic.contentText([{ type: "image" }, { type: "text", text: "a" }, { type: "text", text: "b" }]), "a\nb");
+assert.equal(nsLogic.contentText(undefined), "");
+const nsRequest = nsLogic.buildHandoffRequest(nsLogic.turnTexts(nsBranch), "1. extract logic\n2. add tests");
+assert.match(nsRequest, /## Last assistant message/);
+assert.match(nsRequest, /1\. extract logic/);
+assert.match(nsRequest, /earlier work on the loader/);
+assert.doesNotMatch(nsRequest, /\bok\b/, "a tool result is not conversation");
+assert.match(nsLogic.HANDOFF_SYSTEM_PROMPT, /Never invent one/);
+const nsOverflow = Array.from({ length: 6 }, (_unused, index) => ({ role: "assistant", text: `m${index} ${"x".repeat(200)}` }));
+const nsBlock = nsLogic.serializeTurns(nsOverflow, 700);
+assert.match(nsBlock, /m5 /, "the newest turn survives the budget");
+assert.doesNotMatch(nsBlock, /m0 /, "and the oldest is what gets dropped");
+assert.ok(nsBlock.length <= 701, `the block stays inside the budget (${nsBlock.length})`);
+const nsCappedRequest = nsLogic.buildHandoffRequest([], "y".repeat(5000), { turns: 8, charsPerTurn: 100, totalChars: 200 });
+assert.equal(Math.max(...nsCappedRequest.match(/y+/g).map((run) => run.length)), 200, "the message to hand off is bounded too");
+assert.equal(nsLogic.preview("a\n   b"), "a b");
+assert.equal(nsLogic.preview(""), "(empty)");
+
+// 6. the input source rows, and the disabled ones still naming their source
+assert.deepEqual(nsLogic.sourceRows({ hasAssistant: true, hasModel: true, chosen: "verbatim" }), [
+	"* Last assistant message, as it is",
+	"Handoff prompt built from the last assistant message",
+	"Type it myself",
+]);
+assert.match(nsLogic.sourceRows({ hasAssistant: false, hasModel: true, chosen: "type" })[0], /no assistant message yet/);
+assert.match(nsLogic.sourceRows({ hasAssistant: true, hasModel: false, chosen: "verbatim" })[1], /needs an assistant message and a model/);
+assert.equal(nsLogic.sourceForRow("* Type it myself", nsLogic.SOURCES).kind, "type");
+assert.equal(
+	nsLogic.sourceForRow("Handoff prompt built from the last assistant message (needs an assistant message and a model)", nsLogic.SOURCES).kind,
+	"handoff",
+	"a disabled row still names its source, so the flow can explain why it is not available",
+);
+assert.equal(nsLogic.sourceForRow("something else", nsLogic.SOURCES), undefined);
+
+// 7. the block the user confirms
+const nsSummary = nsLogic
+	.reviewSummary({
+		model: { provider: "anthropic", id: "claude-opus-4-1" },
+		effort: "high",
+		effortNote: "xhigh is not supported by this model",
+		source: nsLogic.SOURCES[1],
+		prompt: "do the thing",
+		cwd: "/repo",
+	})
+	.join("\n");
+assert.match(nsSummary, /model    anthropic\/claude-opus-4-1/);
+assert.match(nsSummary, /effort   high \(xhigh is not supported by this model\)/);
+assert.match(nsSummary, /input    Handoff prompt built from the last assistant message — 12 chars/);
+assert.match(nsSummary, /cwd      \/repo/);
+assert.match(nsSummary, /do the thing/);
+assert.match(nsSummary, /resumable/, "the user is told this session is not lost");
+assert.match(
+	nsLogic.reviewSummary({ model: { provider: "a", id: "b" }, effort: "off", source: nsLogic.SOURCES[2], prompt: "", cwd: "/r" }).join("\n"),
+	/empty input/,
+);
+
+// 8. the recent-models file is a convenience, so a broken one is ignored, never trusted
+assert.deepEqual(nsLogic.parseRecent('[{"provider":"a","id":"b"}]'), [{ provider: "a", id: "b" }]);
+assert.deepEqual(nsLogic.parseRecent("not json"), []);
+assert.deepEqual(nsLogic.parseRecent('{"provider":"a"}'), [], "a bare object is not a list");
+assert.deepEqual(nsLogic.parseRecent('[{"provider":"a","id":""}]'), [], "an incomplete ref is dropped");
+assert.deepEqual(nsLogic.parseRecent(undefined), []);
+assert.deepEqual(JSON.parse(nsLogic.formatRecent({ provider: "a", id: "b" }, [{ provider: "c", id: "d" }, { provider: "a", id: "b" }])), [
+	{ provider: "a", id: "b" },
+	{ provider: "c", id: "d" },
+], "newest first and deduped");
+assert.equal(JSON.parse(nsLogic.formatRecent({ provider: "p", id: "q" }, Array.from({ length: 20 }, (_v, index) => ({ provider: "x", id: `m${index}` })))).length, nsLogic.RECENT_LIMIT);
+
+// 9. the mailbox is single-use and only for the session that follows the one it names
+const nsFreshBox = () => ({ current: { provider: "a", modelId: "b", effort: "low", previousSessionFile: "old.jsonl", createdAt: 1_000 } });
+let nsBox = nsFreshBox();
+assert.equal(nsLogic.takeHandoff(nsBox, { reason: "resume", previousSessionFile: "old.jsonl" }, 1_000), undefined, "only a new session is ours");
+assert.ok(nsBox.current, "and an unrelated start leaves the pending handoff alone");
+assert.equal(nsLogic.takeHandoff(nsBox, { reason: "new", previousSessionFile: "other.jsonl" }, 1_000), undefined, "a switch from another session is not ours");
+assert.ok(nsBox.current);
+assert.equal(nsLogic.takeHandoff(nsBox, { reason: "new", previousSessionFile: "old.jsonl" }, 1_000 + nsLogic.HANDOFF_MAX_AGE_MS + 1), undefined, "a stale handoff is dropped");
+assert.equal(nsBox.current, undefined, "and dropped for good");
+nsBox = nsFreshBox();
+assert.equal(nsLogic.takeHandoff(nsBox, { reason: "new", previousSessionFile: "old.jsonl" }, 2_000)?.modelId, "b");
+assert.equal(nsBox.current, undefined, "consumed exactly once");
+assert.equal(nsLogic.takeHandoff({}, { reason: "new" }, 2_000), undefined, "an empty mailbox is the normal case");
+nsBox = { current: { provider: "a", modelId: "b", effort: "low", createdAt: 1_000 } };
+assert.ok(nsLogic.takeHandoff(nsBox, { reason: "new" }, 1_000), "a handoff with no named parent still applies to any new session");
+
+// 10. the command surface, and the degrade path when there is no terminal to talk to
+function makeNs(options = {}) {
+	const { answers = {}, settings = {}, model = nsModels[1], thinkingLevel = "medium", branch = [], sessionFile = "C:/pi/old.jsonl", mode = "tui", stopReason = "stop", generated = "GENERATED HANDOFF", newSessionImpl } = options;
+	const calls = [];
+	const timeline = [];
+	const notified = [];
+	const sent = [];
+	const modelCalls = [];
+	const levelCalls = [];
+	const handlers = {};
+	const commands = {};
+	const queue = {
+		select: [...(answers.select ?? [])],
+		input: [...(answers.input ?? [])],
+		editor: [...(answers.editor ?? [])],
+		confirm: [...(answers.confirm ?? [])],
+	};
+	const take = (list, fallback) => (list.length > 0 ? list.shift() : fallback);
+	const answer = (list, rows, fallback) => {
+		if (list.length === 0) return fallback;
+		const next = list.shift();
+		if (typeof next === "number") return next < 0 ? rows[rows.length + next] : rows[next];
+		if (next === "@last") return rows[rows.length - 1];
+		return next;
+	};
+
+	const pi = {
+		registerCommand: (name, definition) => {
+			commands[name] = definition;
+		},
+		on: (type, handler) => {
+			(handlers[type] ??= []).push(handler);
+		},
+		getSettings: () => settings,
+		setModel: async (target) => {
+			modelCalls.push(target);
+			timeline.push("setModel");
+			if (target.provider === "boom") throw new Error("no such provider");
+			return target.authed !== false;
+		},
+		setThinkingLevel: (level) => {
+			levelCalls.push(level);
+			timeline.push("setThinkingLevel");
+		},
+	};
+
+	const ui = {
+		select: async (title, rows) => {
+			calls.push(["select", title, rows]);
+			return answer(queue.select, rows, undefined);
+		},
+		input: async (title, placeholder) => {
+			calls.push(["input", title, placeholder]);
+			return take(queue.input, undefined);
+		},
+		editor: async (title, prefill) => {
+			calls.push(["editor", title, prefill]);
+			return take(queue.editor, undefined);
+		},
+		confirm: async (title, message) => {
+			calls.push(["confirm", title, message]);
+			return take(queue.confirm, false);
+		},
+		custom: async (factory) => {
+			calls.push(["custom"]);
+			return await new Promise((resolve) => factory({ ui: {} }, { fg: (_color, text) => text }, {}, resolve));
+		},
+		notify: (message, type) => notified.push([message, type]),
+		theme: { fg: (_color, text) => text },
+	};
+
+	const registry = {
+		getAll: () => nsModels,
+		hasConfiguredAuth: (candidate) => candidate.authed !== false,
+		find: (provider, id) => nsModels.find((candidate) => candidate.provider === provider && candidate.id === id),
+		complete: async (_model, request) => {
+			calls.push(["complete", request.systemPrompt, request.messages[0].content[0].text]);
+			return { stopReason, content: [{ type: "text", text: generated }] };
+		},
+	};
+
+	const ctx = {
+		mode,
+		hasUI: mode === "tui",
+		cwd: "/repo",
+		model,
+		thinkingLevel,
+		scopedModels: [],
+		ui,
+		modelRegistry: registry,
+		sessionManager: { getBranch: () => branch, getSessionFile: () => sessionFile },
+		newSession: async (sessionOptions) => {
+			calls.push(["newSession", sessionOptions?.parentSession]);
+			if (newSessionImpl) return newSessionImpl(sessionOptions);
+			// Pi's real order: the replacement instance gets session_start, then withSession runs.
+			for (const handler of handlers.session_start ?? []) {
+				await handler({ type: "session_start", reason: "new", previousSessionFile: sessionFile }, ctx);
+			}
+			await sessionOptions?.withSession?.({
+				ui,
+				sendUserMessage: async (text) => {
+					timeline.push("sendUserMessage");
+					sent.push(text);
+				},
+			});
+			return { cancelled: false };
+		},
+	};
+
+	resetNsRecent();
+	delete globalThis[Symbol.for("pi-settings.new-session.handoff")];
+	nsFactory(pi);
+	return { pi, commands, handlers, ctx, calls, timeline, notified, sent, modelCalls, levelCalls, queue };
+}
+
+function resetNsRecent() {
+	rmSync(nsRecentPath, { force: true });
+}
+
+const nsHeadless = makeNs({ mode: "print" });
+await nsHeadless.commands["new-session"].handler("do it", nsHeadless.ctx);
+assert.match(nsHeadless.notified.at(-1)[0], /needs the interactive terminal/);
+assert.equal(nsHeadless.calls.length, 0, "no dialog is opened without a terminal");
+assert.equal(nsHeadless.sent.length, 0);
+
+const nsBadFlag = makeNs();
+await nsBadFlag.commands["new-session"].handler("--effort turbo do it", nsBadFlag.ctx);
+assert.match(nsBadFlag.notified.at(-1)[0], /--effort must be one of/);
+assert.match(nsBadFlag.notified.at(-1)[0], /Usage: \/new-session/);
+assert.equal(nsBadFlag.calls.length, 0, "a bad argument never reaches a dialog");
+
+const nsNoCatalogue = makeNs({ model: undefined });
+nsNoCatalogue.ctx.modelRegistry.getAll = () => [];
+await nsNoCatalogue.commands["new-session"].handler("", nsNoCatalogue.ctx);
+assert.match(nsNoCatalogue.notified.at(-1)[0], /catalogue is empty/);
+
+const nsEmptyArgs = makeNs();
+await nsEmptyArgs.commands["new-session"].handler("   ", nsEmptyArgs.ctx);
+assert.match(nsEmptyArgs.notified.at(-1)[0], /closed/, "no answer at the model picker is a clean cancel");
+assert.equal(nsEmptyArgs.calls.some((call) => call[0] === "newSession"), false, "a cancel never switches");
+
+const nsCompletions = makeNs().commands["new-session"];
+assert.ok(nsCompletions.description);
+assert.deepEqual(
+	nsCompletions.getArgumentCompletions("").map((item) => item.label),
+	["--model", "--effort"],
+);
+assert.equal(nsCompletions.getArgumentCompletions("--model o"), null, "once a flag has a value the flow stops guessing");
+
+// 11. everything named in the arguments: no dialog but the confirmation, and the model applied first
+const nsExplicit = makeNs({ answers: { confirm: [true] } });
+await nsExplicit.commands["new-session"].handler("--model anthropic/claude-opus-4-1 --effort high do it", nsExplicit.ctx);
+assert.deepEqual(nsExplicit.timeline, ["setModel", "setThinkingLevel", "sendUserMessage"], "the input goes out on the chosen model");
+assert.equal(nsExplicit.modelCalls[0].id, "claude-opus-4-1");
+assert.deepEqual(nsExplicit.levelCalls, ["high"]);
+assert.deepEqual(nsExplicit.sent, ["do it"]);
+assert.equal(nsExplicit.calls.filter((call) => call[0] === "select").length, 0, "a named model and level need no picker");
+assert.equal(nsExplicit.calls.filter((call) => call[0] === "confirm").length, 1);
+assert.match(nsExplicit.calls.find((call) => call[0] === "confirm")[2], /model    anthropic\/claude-opus-4-1/);
+assert.equal(nsExplicit.calls.find((call) => call[0] === "newSession")[1], "C:/pi/old.jsonl", "the new session records its parent");
+assert.deepEqual(JSON.parse(readFileSync(nsRecentPath, "utf8")), [{ provider: "anthropic", id: "claude-opus-4-1" }], "the model just used becomes the recent one");
+
+// 12. the same, with the level carried by the pattern instead of a flag
+const nsSuffix = makeNs({ answers: { confirm: [true] } });
+await nsSuffix.commands["new-session"].handler("--model claude-opus-4-1:xhigh do it", nsSuffix.ctx);
+assert.deepEqual(nsSuffix.levelCalls, ["high"], "xhigh is clamped by the model's own levels");
+assert.match(nsSuffix.calls.find((call) => call[0] === "confirm")[2], /xhigh is not supported by this model/);
+
+// 13. a model without reasoning never gets an effort dialog
+const nsNoReasoning = makeNs({ answers: { confirm: [true] } });
+await nsNoReasoning.commands["new-session"].handler("--model anthropic/claude-sonnet-4-5 do it", nsNoReasoning.ctx);
+assert.equal(nsNoReasoning.calls.filter((call) => call[0] === "select").length, 0);
+assert.deepEqual(nsNoReasoning.levelCalls, ["off"]);
+
+// 14. an unknown or credential-less pattern is explained, then hands over to the picker
+const nsNoAuth = makeNs();
+await nsNoAuth.commands["new-session"].handler("--model github-copilot/claude-sonnet-4-5 do it", nsNoAuth.ctx);
+assert.match(nsNoAuth.notified[0][0], /no credentials for github-copilot\/claude-sonnet-4-5/);
+assert.match(nsNoAuth.notified[0][0], /\/login github-copilot/);
+assert.match(nsNoAuth.notified.at(-1)[0], /closed/, "the picker it fell back to was closed");
+assert.equal(nsNoAuth.sent.length, 0, "nothing is started");
+
+const nsUnknown = makeNs();
+await nsUnknown.commands["new-session"].handler("--model nosuchmodel do it", nsUnknown.ctx);
+assert.match(nsUnknown.notified[0][0], /no model matches "nosuchmodel"/);
+
+// 15. an ambiguous pattern lists the candidates instead of choosing one
+const nsAmbiguousFlow = makeNs({ answers: { select: ["@last"], input: ["claude-sonnet-4-5"] } });
+await nsAmbiguousFlow.commands["new-session"].handler("", nsAmbiguousFlow.ctx);
+const nsCandidateCall = nsAmbiguousFlow.calls.find((call) => call[0] === "select" && String(call[1]).includes("models match"));
+assert.ok(nsCandidateCall, "the searched pattern opens the candidate picker");
+assert.deepEqual(nsCandidateCall[2], ["anthropic/claude-sonnet-4-5", "vertex/claude-sonnet-4-5"]);
+assert.equal(nsAmbiguousFlow.modelCalls.length, 0, "nothing is started until a candidate is picked");
+
+// 16. the full interactive path: shortlist, search, effort, verbatim input, confirm
+const nsInteractive = makeNs({
+	answers: { select: ["@last", "* high", "* Last assistant message, as it is"], input: ["qwen"], editor: ["do the tasks"], confirm: [true] },
+	model: nsModels[0],
+	branch: nsBranch,
+});
+await nsInteractive.commands["new-session"].handler("", nsInteractive.ctx);
+assert.equal(nsInteractive.calls[0][0], "select");
+assert.match(nsInteractive.calls[0][1], /this session is anthropic\/claude-opus-4-1/, "the title says what is being replaced");
+assert.equal(nsInteractive.calls[0][2].at(-1), nsLogic.SEARCH_ROW);
+assert.equal(nsInteractive.modelCalls[0].id, "qwen/qwen3-coder:exacto", "the searched model is the one started");
+assert.deepEqual(nsInteractive.levelCalls, ["high"]);
+const nsVerbatimEditor = nsInteractive.calls.find((call) => call[0] === "editor");
+assert.equal(nsVerbatimEditor[2], "1. extract logic\n2. add tests", "the verbatim source prefills the last output");
+assert.deepEqual(nsInteractive.sent, ["do the tasks"], "the edited text is what the new session gets");
+assert.match(nsInteractive.calls.find((call) => call[0] === "confirm")[2], /input    Last assistant message, as it is — 12 chars/);
+
+// 17. the handoff source: one model call, then the result is editable
+const nsHandoff = makeNs({
+	answers: { select: [0, "* high", 1], editor: ["REVIEWED"], confirm: [true] },
+	model: nsModels[0],
+	branch: nsBranch,
+});
+await nsHandoff.commands["new-session"].handler("", nsHandoff.ctx);
+const nsCompleteCall = nsHandoff.calls.find((call) => call[0] === "complete");
+assert.equal(nsCompleteCall[1], nsLogic.HANDOFF_SYSTEM_PROMPT, "the generation uses the shipped prompt");
+assert.match(nsCompleteCall[2], /## Last assistant message/);
+assert.equal(nsHandoff.calls.find((call) => call[0] === "editor")[2], "GENERATED HANDOFF", "the generated prompt is prefilled for review");
+assert.deepEqual(nsHandoff.sent, ["REVIEWED"]);
+assert.equal(nsHandoff.modelCalls[0].id, "claude-opus-4-1", "index 0 of the shortlist is the current model");
+
+// 18. an aborted or empty generation falls back to typing, and an empty input asks again
+const nsAborted = makeNs({
+	answers: { select: [0, "* high", 1, 2], editor: ["typed after all"], confirm: [true] },
+	model: nsModels[0],
+	branch: nsBranch,
+	stopReason: "aborted",
+});
+await nsAborted.commands["new-session"].handler("", nsAborted.ctx);
+assert.match(nsAborted.notified.find((entry) => /no handoff was written/.test(entry[0]))[0], /Type or paste/);
+assert.deepEqual(nsAborted.sent, ["typed after all"]);
+
+const nsBlank = makeNs({
+	answers: { select: [0, "* high", 2, 2], editor: ["   ", "final text"], confirm: [true] },
+	model: nsModels[0],
+	branch: nsBranch,
+});
+await nsBlank.commands["new-session"].handler("", nsBlank.ctx);
+assert.match(nsBlank.notified.at(-2)[0], /the input is empty/);
+assert.deepEqual(nsBlank.sent, ["final text"], "a blank input is refused, not sent");
+
+// 19. the review screen can send the flow back down the ladder
+const nsRework = makeNs({ answers: { confirm: [false, true], select: ["model — keep going with another model", "vertex/claude-sonnet-4-5"] } });
+await nsRework.commands["new-session"].handler("--model anthropic/claude-opus-4-1 --effort high do it", nsRework.ctx);
+assert.equal(nsRework.calls.filter((call) => call[0] === "confirm").length, 2, "the first answer was no");
+assert.match(nsRework.calls.filter((call) => call[0] === "select").at(-2)[1], /What should change\?/);
+assert.deepEqual(nsRework.modelCalls.map((candidate) => candidate.id), ["claude-sonnet-4-5"]);
+assert.deepEqual(nsRework.levelCalls, ["off"], "the new model has no reasoning, so the asked level is clamped");
+assert.deepEqual(nsRework.sent, ["do it"], "the prompt survives the rework");
+
+const nsDiscard = makeNs({ answers: { confirm: [false], select: ["discard — leave this session alone"] } });
+await nsDiscard.commands["new-session"].handler("--model anthropic/claude-opus-4-1 do it", nsDiscard.ctx);
+assert.match(nsDiscard.notified.at(-1)[0], /closed/);
+assert.equal(nsDiscard.calls.some((call) => call[0] === "newSession"), false, "discard never switches");
+
+// 20. a switch another extension refuses leaves no model change, no message and no recent entry
+const nsRefused = makeNs({ answers: { select: ["* medium"], confirm: [true] }, newSessionImpl: async () => ({ cancelled: true }) });
+await nsRefused.commands["new-session"].handler("--model anthropic/claude-opus-4-1 do it", nsRefused.ctx);
+assert.equal(nsRefused.sent.length, 0);
+assert.equal(nsRefused.modelCalls.length, 0);
+assert.equal(existsSync(nsRecentPath), false, "the recent file is only written once the switch happened");
+assert.match(nsRefused.notified.at(-1)[0], /refused the switch/);
+await nsRefused.handlers.session_start[0]({ type: "session_start", reason: "new", previousSessionFile: "C:/pi/old.jsonl" }, nsRefused.ctx);
+assert.equal(nsRefused.modelCalls.length, 0, "the cancelled handoff is gone, so a later /new is not coloured by it");
+
+// 21. the replacement session applies the handoff, and survives one it cannot apply
+const nsApplied = makeNs({ answers: { confirm: [true] } });
+await nsApplied.commands["new-session"].handler("--model anthropic/claude-opus-4-1 --effort minimal do it", nsApplied.ctx);
+assert.equal(nsApplied.notified.at(-1)[1], "info", "the new session says what it switched to");
+assert.match(nsApplied.notified.at(-1)[0], /anthropic\/claude-opus-4-1 on minimal/);
+
+const nsNoCreds = makeNs();
+globalThis[Symbol.for("pi-settings.new-session.handoff")] = {
+	current: { provider: "github-copilot", modelId: "claude-sonnet-4-5", effort: "low", previousSessionFile: "C:/pi/old.jsonl", createdAt: Date.now() },
+};
+await nsNoCreds.handlers.session_start[0]({ type: "session_start", reason: "new", previousSessionFile: "C:/pi/old.jsonl" }, nsNoCreds.ctx);
+assert.match(nsNoCreds.notified.at(-1)[0], /no credentials for github-copilot/);
+assert.equal(globalThis[Symbol.for("pi-settings.new-session.handoff")].current, undefined, "consumed even when it cannot be applied");
+
+const nsThrew = makeNs();
+globalThis[Symbol.for("pi-settings.new-session.handoff")] = {
+	current: { provider: "boom", modelId: "gone", effort: "low", previousSessionFile: "C:/pi/old.jsonl", createdAt: Date.now() },
+};
+await nsThrew.handlers.session_start[0]({ type: "session_start", reason: "new", previousSessionFile: "C:/pi/old.jsonl" }, nsThrew.ctx);
+assert.match(nsThrew.notified.at(-1)[0], /could not select boom\/gone: no such provider/);
+assert.equal(nsThrew.levelCalls.length, 0, "a failed model switch never sets a level");
+
+const nsMissing = makeNs();
+globalThis[Symbol.for("pi-settings.new-session.handoff")] = {
+	current: { provider: "nowhere", modelId: "gone", effort: "low", previousSessionFile: "C:/pi/old.jsonl", createdAt: Date.now() },
+};
+await nsMissing.handlers.session_start[0]({ type: "session_start", reason: "new", previousSessionFile: "C:/pi/old.jsonl" }, nsMissing.ctx);
+assert.match(nsMissing.notified.at(-1)[0], /no longer in the catalogue/);
+
+// 22. a session that never answered cannot be handed off, and the flow says so on the row
+const nsNoAssistant = makeNs({ answers: { select: [0, 2, 2], editor: ["anything"], confirm: [true] }, model: nsModels[0], branch: [] });
+await nsNoAssistant.commands["new-session"].handler("", nsNoAssistant.ctx);
+assert.match(nsNoAssistant.calls.find((call) => call[0] === "select" && /first input/.test(call[1]))[2][0], /no assistant message yet/);
+assert.deepEqual(nsNoAssistant.sent, ["anything"]);
+
+// 23. the per-model level saved with Ctrl+S is the marked row of the effort picker
+const nsPerModel = makeNs({ answers: { select: [0, "* low", 2], editor: ["go"], confirm: [true] }, settings: { modelThinkingLevels: { "anthropic/claude-opus-4-1": "low" } }, model: nsModels[0], branch: nsBranch });
+await nsPerModel.commands["new-session"].handler("", nsPerModel.ctx);
+assert.deepEqual(nsPerModel.calls.find((call) => call[0] === "select" && /Thinking level/.test(call[1]))[2], ["off", "minimal", "* low", "medium", "high"], "the saved level is the marked row");
+assert.deepEqual(nsPerModel.levelCalls, ["low"]);
+assert.deepEqual(nsPerModel.sent, ["go"]);
+
+delete process.env.PI_AGENT_DIR_OVERRIDE;
+rmSync(nsAgentDir, { recursive: true, force: true });
+
+console.log("OK - new-session smoke tests passed");
